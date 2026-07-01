@@ -55,7 +55,7 @@ const config = {
   port: Number(fileConfig.port || env.PORT || 4000),
   dataDir,
   receiptsDir: path.join(dataDir, 'receipts'),
-  dbPath: path.join(dataDir, 'wellybox.db'),
+  dbPath: path.join(dataDir, 'receiptify.db'),
   defaultCurrency: fileConfig.defaultCurrency || env.DEFAULT_CURRENCY || 'USD',
 
   extractor: {

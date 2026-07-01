@@ -9,7 +9,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">🧾 Local WellyBox</div>
+        <div className="brand">🧾 Receiptify</div>
         <nav>
           <NavLink to="/" end>
             Receipts

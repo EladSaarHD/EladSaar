@@ -1,6 +1,6 @@
-# Local WellyBox — self-hosted receipt & invoice manager
+# Receiptify — self-hosted receipt & invoice manager
 
-A private, local clone of [WellyBox](https://www.wellybox.com/). Collect your
+Receiptify is a private, local clone of [WellyBox](https://www.wellybox.com/). Collect your
 business receipts and invoices, let AI extract the vendor / amount / date / tax,
 organize everything in a searchable dashboard, and export for accounting — all
 running on your own machine. Nothing leaves your computer.
@@ -100,7 +100,7 @@ file → sha256 dedupe → store on disk → extract (Codex→OCR→manual)
 ```
 server/   Express API, SQLite, extraction adapters, ingestion sources
 web/      Vite + React dashboard
-data/     runtime receipts + wellybox.db (gitignored)
+data/     runtime receipts + receiptify.db (gitignored)
 ```
 
 ## API quick reference

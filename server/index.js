@@ -49,7 +49,7 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
     res
       .type('html')
       .send(
-        '<h1>Local WellyBox API is running</h1>' +
+        '<h1>Receiptify API is running</h1>' +
           '<p>The web UI is not built yet. Run <code>npm run build</code> ' +
           'then reload, or <code>npm run dev</code> for the dev server on Vite.</p>' +
           '<p>API health: <a href="/api/health">/api/health</a></p>'
@@ -59,7 +59,7 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
 
 // Bind to localhost only — this is a private, single-user tool.
 const server = app.listen(config.port, '127.0.0.1', () => {
-  console.log(`\n  Local WellyBox → http://localhost:${config.port}`);
+  console.log(`\n  Receiptify → http://localhost:${config.port}`);
   console.log(`  Data dir:   ${config.dataDir}`);
   console.log(`  Extractor:  ${config.extractor.mode}`);
 

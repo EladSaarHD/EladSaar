@@ -29,7 +29,7 @@ async function pdfFirstPageToPng(pdfPath) {
   if (!(await hasPdftoppm())) return null;
   const outPrefix = path.join(
     os.tmpdir(),
-    `wellybox-${path.basename(pdfPath, '.pdf')}`
+    `receiptify-${path.basename(pdfPath, '.pdf')}`
   );
   return new Promise((resolve) => {
     execFile(

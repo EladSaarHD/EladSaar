@@ -1,8 +1,8 @@
 {
-  "name": "local-wellybox",
+  "name": "receiptify",
   "version": "0.1.0",
   "private": true,
-  "description": "Local, self-hosted receipt & invoice manager — a private WellyBox clone.",
+  "description": "Receiptify — a local, self-hosted receipt & invoice manager (a private WellyBox clone).",
   "type": "commonjs",
   "engines": {
     "node": ">=18"
