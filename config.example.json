@@ -1,0 +1,22 @@
+{
+  "_comment": "Optional. Copy to config.local.json to override .env values. config.local.json is gitignored. Values here take precedence over .env.",
+  "port": 4000,
+  "dataDir": "./data",
+  "defaultCurrency": "USD",
+  "extractor": {
+    "mode": "codex",
+    "command": "codex",
+    "args": ["exec", "--image", "{image}", "{prompt}"]
+  },
+  "watchDir": "",
+  "imap": {
+    "host": "",
+    "port": 993,
+    "secure": true,
+    "user": "",
+    "password": "",
+    "mailbox": "INBOX",
+    "filterSubject": ["receipt", "invoice", "order"],
+    "pollSeconds": 300
+  }
+}

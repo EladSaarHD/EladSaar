@@ -1,0 +1,119 @@
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --line: #e4e7eb;
+  --text: #1f2933;
+  --muted: #7b8794;
+  --accent: #4e79a7;
+  --danger: #e15759;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.brand { font-weight: 700; font-size: 1.1rem; }
+.topbar nav { display: flex; gap: 1rem; }
+.topbar nav a {
+  text-decoration: none;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+}
+.topbar nav a.active { color: var(--accent); background: #eef3f9; }
+
+.content { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+
+.dropzone {
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  padding: 1.5rem;
+  text-align: center;
+  background: var(--card);
+  margin-bottom: 1rem;
+}
+.dropzone.over { border-color: var(--accent); background: #eef3f9; }
+
+.btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.btn.primary { background: var(--accent); }
+.btn.danger { background: var(--danger); }
+.btn:hover { filter: brightness(0.95); }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.filters input, .filters select { padding: 0.4rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; }
+
+.banner { background: #eef3f9; padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 0.75rem; }
+.muted { color: var(--muted); }
+
+.grid { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 10px; overflow: hidden; }
+.grid th, .grid td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); text-align: left; }
+.grid th.num, .grid td.num { text-align: right; }
+.grid tbody tr { cursor: pointer; }
+.grid tbody tr:hover { background: #f0f4f8; }
+
+.pill { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+.pill-pending { background: #fdecea; color: var(--danger); }
+.pill-extracted { background: #fff4e0; color: #b06d00; }
+.pill-reviewed { background: #e6f4ea; color: #1e7d34; }
+
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem; }
+.preview img, .preview iframe { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; min-height: 300px; }
+.form label { display: block; margin-bottom: 0.6rem; }
+.form label span { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.2rem; }
+.form input, .form textarea { width: 100%; padding: 0.45rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; }
+.actions { display: flex; gap: 0.75rem; align-items: center; margin-top: 0.5rem; }
+.ok { color: #1e7d34; font-weight: 600; }
+.link { background: none; border: none; color: var(--accent); cursor: pointer; font-weight: 600; }
+.link.danger { color: var(--danger); }
+
+.cards { display: flex; gap: 1rem; margin: 1rem 0; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.25rem; flex: 1; }
+.card-label { color: var(--muted); font-size: 0.85rem; }
+.card-value { font-size: 1.6rem; font-weight: 700; }
+
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+.chart { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; }
+
+.settings section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+.status { list-style: none; padding: 0; }
+.status li { padding: 0.2rem 0; }
+.rule-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.rule-form input, .rule-form select { padding: 0.4rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; }
+
+@media (max-width: 780px) {
+  .detail-grid, .chart-row { grid-template-columns: 1fr; }
+}
