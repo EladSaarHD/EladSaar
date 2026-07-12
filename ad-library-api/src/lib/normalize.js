@@ -172,11 +172,23 @@ function normalizeSearchResponse(data) {
     for (const node of results) ads.push(normalizeAd(node));
   }
   const pageInfo = conn.page_info || {};
+  const continuation = data && data.__continuation;
+  let endCursor = nonEmpty(pageInfo.end_cursor) || null;
+  if (endCursor && continuation?.sessionID) {
+    endCursor = `mal1.${Buffer.from(
+      JSON.stringify({
+        cursor: endCursor,
+        sessionID: continuation.sessionID,
+        collationToken: continuation.collationToken ?? null,
+        stateID: continuation.stateID || null,
+      })
+    ).toString('base64url')}`;
+  }
   return {
     ads,
     page_info: {
       has_next_page: Boolean(pageInfo.has_next_page),
-      end_cursor: nonEmpty(pageInfo.end_cursor) || null,
+      end_cursor: endCursor,
     },
     count: typeof conn.count === 'number' ? conn.count : null,
   };

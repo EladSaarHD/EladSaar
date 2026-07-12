@@ -9,6 +9,8 @@ const {
   discoverDocIds,
   findDocId,
   cookieFromSetCookie,
+  mergeCookieStrings,
+  extractChallengePath,
 } = require('../src/lib/session');
 const { FALLBACK_DOC_IDS } = require('../src/constants');
 
@@ -43,12 +45,28 @@ test('cookieFromSetCookie keeps only wanted cookies', () => {
   const headers = [
     'datr=abc123; Path=/; Domain=.facebook.com; HttpOnly',
     'sb=xyz; Path=/; Secure',
+    'rd_challenge=challenge-cookie; Path=/; Secure',
     'presence=irrelevant; Path=/',
   ];
   const cookie = cookieFromSetCookie(headers);
   assert.match(cookie, /datr=abc123/);
   assert.match(cookie, /sb=xyz/);
+  assert.match(cookie, /rd_challenge=challenge-cookie/);
   assert.doesNotMatch(cookie, /presence/);
+});
+
+test('extractChallengePath accepts only the bounded same-origin path shape', () => {
+  const html = `<script>fetch('/security/hsts-pixel.gif?challenge=3', { method: 'POST' })</script>`;
+  assert.strictEqual(extractChallengePath(html), '/security/hsts-pixel.gif?challenge=3');
+  assert.strictEqual(extractChallengePath(`<script>fetch('https://evil.example/?challenge=3')</script>`), null);
+  assert.strictEqual(extractChallengePath('<html>normal page</html>'), null);
+});
+
+test('mergeCookieStrings merges and replaces cookie values by name', () => {
+  assert.strictEqual(
+    mergeCookieStrings('rd_challenge=one; datr=abc', 'rd_challenge=two; sb=xyz'),
+    'rd_challenge=two; datr=abc; sb=xyz'
+  );
 });
 
 // If a real page was captured via the smoke script, assert we can parse it.

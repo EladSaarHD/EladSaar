@@ -8,14 +8,14 @@ const LIBRARY_URL = 'https://www.facebook.com/ads/library/';
 
 const FRIENDLY_NAMES = {
   search: 'AdLibrarySearchPaginationQuery',
-  details: 'AdLibraryAdDetailsV2Query',
+  details: 'AdLibraryV3AdDetailsQuery',
 };
 
 // Last-known-good doc_ids. Used only when runtime discovery from the
 // ads/library HTML fails — Facebook rotates these regularly.
 const FALLBACK_DOC_IDS = {
-  search: '25464068859919530',
-  details: '9407590475934210',
+  search: '24922295957467452',
+  details: '25068828942793558',
 };
 
 // Constant sent by the web client on every GraphQL call.
@@ -32,7 +32,7 @@ const UPSTREAM_ERROR_CODES = {
 
 // Accepted values for API query params → GraphQL variable values.
 const ENUMS = {
-  activeStatus: { all: 'ALL', active: 'ACTIVE', inactive: 'INACTIVE' },
+  activeStatus: { all: 'all', active: 'active', inactive: 'inactive' },
   adType: {
     all: 'ALL',
     political_and_issue_ads: 'POLITICAL_AND_ISSUE_ADS',
@@ -41,11 +41,11 @@ const ENUMS = {
     credit_ads: 'CREDIT_ADS',
     financial_products_and_services_ads: 'FINANCIAL_PRODUCTS_AND_SERVICES_ADS',
   },
-  mediaType: { all: 'ALL', image: 'IMAGE', meme: 'MEME', video: 'VIDEO', none: 'NONE' },
+  mediaType: { all: 'all', image: 'image', meme: 'meme', video: 'video', none: 'none' },
   searchType: {
-    keyword_unordered: 'KEYWORD_UNORDERED',
-    keyword_exact_phrase: 'KEYWORD_EXACT_PHRASE',
-    page: 'PAGE',
+    keyword_unordered: 'keyword_unordered',
+    keyword_exact_phrase: 'keyword_exact_phrase',
+    page: 'page',
   },
   publisherPlatform: {
     facebook: 'FACEBOOK',
@@ -59,10 +59,10 @@ const ENUMS = {
 const DEFAULTS = {
   first: 30,
   maxFirst: 50,
-  activeStatus: 'ALL',
+  activeStatus: 'all',
   adType: 'ALL',
-  mediaType: 'ALL',
-  searchType: 'KEYWORD_UNORDERED',
+  mediaType: 'all',
+  searchType: 'keyword_unordered',
 };
 
 module.exports = {
