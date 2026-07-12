@@ -28,10 +28,24 @@ cp .env.example .env      # optional — sensible defaults work out of the box
 npm start
 ```
 
-The server binds to `127.0.0.1:4100` by default (localhost only — it is a
-private, single-user tool). Open <http://127.0.0.1:4100/> for a quick index.
+The server binds to `127.0.0.1:4100` by default. Open
+`http://127.0.0.1:4100` for the React intelligence workspace, or use the JSON
+endpoints below. For trusted same-network access, set `BIND_HOST=0.0.0.0` and open the Mac's LAN address.
+Do not expose the service directly to the public internet without authentication.
 
-For live development: `npm run dev` (restarts on file changes).
+## Web interface
+
+The responsive React interface supports multi-query searches, country/status/media/
+platform/date filters, evidence and longevity sorting, creative previews, full ad
+details, Meta deeplinks, and compact Hunter analysis briefs.
+
+```bash
+npm --prefix web install
+npm run test:ui
+npm run build:ui
+```
+
+The production build is served by the existing Node process.
 
 ## Endpoints
 
