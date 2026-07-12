@@ -1,0 +1,29 @@
+import { describe, expect, it } from 'vitest';
+import { buildSearchParams, normalizeQueries, sortAds } from './search.js';
+
+describe('search helpers', () => {
+  it('normalizes newline and comma separated queries without duplicates', () => {
+    expect(normalizeQueries('Nike, running shoes\nNike')).toEqual(['Nike', 'running shoes']);
+  });
+
+  it('builds only supported API search parameters', () => {
+    const params = buildSearchParams({
+      query: 'running shoes', country: 'US', activeStatus: 'active', mediaType: 'video',
+      platform: 'instagram', startDate: '2026-01-01', endDate: '', limit: 12,
+    });
+    expect(Object.fromEntries(params)).toEqual({
+      q: 'running shoes', country: 'US', active_status: 'active', media_type: 'video',
+      platform: 'instagram', start_date: '2026-01-01', first: '12',
+    });
+  });
+
+  it('sorts ads by evidence, longevity, or newest start date', () => {
+    const ads = [
+      { ad_archive_id: '1', evidence_score: 2, start_date: '2026-06-01' },
+      { ad_archive_id: '2', evidence_score: 8, start_date: '2025-01-01' },
+    ];
+    expect(sortAds(ads, 'evidence')[0].ad_archive_id).toBe('2');
+    expect(sortAds(ads, 'newest')[0].ad_archive_id).toBe('1');
+    expect(sortAds(ads, 'longest')[0].ad_archive_id).toBe('2');
+  });
+});
