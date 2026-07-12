@@ -1,0 +1,205 @@
+{
+  "ad_library_main": {
+    "search_results_connection": {
+      "count": 4213,
+      "edges": [
+        {
+          "node": {
+            "collated_results": [
+              {
+                "ad_archive_id": "1234567890123401",
+                "ad_id": null,
+                "page_id": "20531316728",
+                "page_name": "Nike",
+                "is_active": true,
+                "start_date": 1704067200,
+                "end_date": 1706745600,
+                "publisher_platform": ["FACEBOOK", "INSTAGRAM"],
+                "currency": "",
+                "spend": null,
+                "impressions_with_index": { "impressions_text": null, "impressions_index": -1 },
+                "reach_estimate": null,
+                "contains_sensitive_content": false,
+                "categories": ["UNKNOWN"],
+                "collation_count": 6,
+                "aaa_info": null,
+                "snapshot": {
+                  "body": { "text": "Shop the new Air Max collection. Free shipping this week." },
+                  "title": "Nike Air Max",
+                  "caption": "nike.com",
+                  "byline": null,
+                  "cta_text": "Shop now",
+                  "cta_type": "SHOP_NOW",
+                  "link_url": "https://www.nike.com/air-max",
+                  "display_format": "IMAGE",
+                  "page_profile_uri": "https://www.facebook.com/nike",
+                  "page_profile_picture_url": "https://scontent.xx.fbcdn.net/nike_profile.jpg",
+                  "images": [
+                    {
+                      "original_image_url": "https://scontent.xx.fbcdn.net/airmax_orig.jpg",
+                      "resized_image_url": "https://scontent.xx.fbcdn.net/airmax_resized.jpg",
+                      "watermarked_resized_image_url": "https://scontent.xx.fbcdn.net/airmax_wm.jpg"
+                    }
+                  ],
+                  "videos": [],
+                  "cards": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "node": {
+            "collated_results": [
+              {
+                "ad_archive_id": "1234567890123402",
+                "ad_id": "998877",
+                "page_id": "20531316728",
+                "page_name": "Nike",
+                "is_active": false,
+                "start_date": 1701388800,
+                "end_date": null,
+                "publisher_platform": ["INSTAGRAM"],
+                "currency": "",
+                "spend": null,
+                "impressions_with_index": { "impressions_text": null, "impressions_index": -1 },
+                "reach_estimate": null,
+                "contains_sensitive_content": false,
+                "categories": [],
+                "collation_count": 1,
+                "aaa_info": null,
+                "snapshot": {
+                  "body": { "text": "Just do it. Watch the film." },
+                  "title": null,
+                  "caption": null,
+                  "byline": null,
+                  "cta_text": "Learn more",
+                  "cta_type": "LEARN_MORE",
+                  "link_url": "https://www.nike.com/film",
+                  "display_format": "VIDEO",
+                  "page_profile_uri": "https://www.facebook.com/nike",
+                  "page_profile_picture_url": "https://scontent.xx.fbcdn.net/nike_profile.jpg",
+                  "images": [],
+                  "videos": [
+                    {
+                      "video_hd_url": "https://video.xx.fbcdn.net/film_hd.mp4",
+                      "video_sd_url": "https://video.xx.fbcdn.net/film_sd.mp4",
+                      "video_preview_image_url": "https://scontent.xx.fbcdn.net/film_preview.jpg",
+                      "watermarked_video_hd_url": "https://video.xx.fbcdn.net/film_hd_wm.mp4",
+                      "watermarked_video_sd_url": "https://video.xx.fbcdn.net/film_sd_wm.mp4"
+                    }
+                  ],
+                  "cards": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "node": {
+            "collated_results": [
+              {
+                "ad_archive_id": "1234567890123403",
+                "ad_id": null,
+                "page_id": "555000111",
+                "page_name": "Committee for Progress",
+                "is_active": true,
+                "start_date": 1699660800,
+                "end_date": 1702252800,
+                "publisher_platform": ["FACEBOOK"],
+                "currency": "USD",
+                "spend": { "lower_bound": "5000", "upper_bound": "5999" },
+                "impressions_with_index": { "impressions_text": "10K - 15K", "impressions_index": 3 },
+                "reach_estimate": null,
+                "contains_sensitive_content": false,
+                "categories": ["POLITICAL"],
+                "collation_count": 2,
+                "aaa_info": {
+                  "eu_total_reach": 125000,
+                  "payer_beneficiary_data": [
+                    { "payer": "Committee for Progress", "beneficiary": "Committee for Progress" }
+                  ]
+                },
+                "snapshot": {
+                  "body": { "text": "Vote for a brighter future this November." },
+                  "title": "A Brighter Future",
+                  "caption": "progress.org",
+                  "byline": "Paid for by Committee for Progress",
+                  "cta_text": "Sign up",
+                  "cta_type": "SIGN_UP",
+                  "link_url": "https://progress.org/pledge",
+                  "display_format": "IMAGE",
+                  "page_profile_uri": "https://www.facebook.com/committeeforprogress",
+                  "page_profile_picture_url": "https://scontent.xx.fbcdn.net/cfp_profile.jpg",
+                  "images": [
+                    {
+                      "original_image_url": "https://scontent.xx.fbcdn.net/cfp_orig.jpg",
+                      "resized_image_url": "https://scontent.xx.fbcdn.net/cfp_resized.jpg",
+                      "watermarked_resized_image_url": null
+                    }
+                  ],
+                  "videos": [],
+                  "cards": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "node": {
+            "collated_results": [
+              {
+                "ad_archive_id": "1234567890123404",
+                "page_id": "777888999",
+                "page_name": "Acme Store",
+                "is_active": true,
+                "start_date": 1705536000,
+                "publisher_platform": ["FACEBOOK", "INSTAGRAM", "MESSENGER"],
+                "snapshot": {
+                  "body": { "text": "Our best sellers, all in one place." },
+                  "cta_text": "Shop now",
+                  "display_format": "DCO",
+                  "images": [],
+                  "videos": [],
+                  "cards": [
+                    {
+                      "title": "Sneakers",
+                      "body": "From $49",
+                      "cta_text": "Buy",
+                      "link_url": "https://acme.example/sneakers",
+                      "original_image_url": "https://scontent.xx.fbcdn.net/card1.jpg",
+                      "video_hd_url": null
+                    },
+                    {
+                      "title": "Backpacks",
+                      "body": "From $29",
+                      "cta_text": "Buy",
+                      "link_url": "https://acme.example/backpacks",
+                      "original_image_url": "https://scontent.xx.fbcdn.net/card2.jpg",
+                      "video_hd_url": "https://video.xx.fbcdn.net/card2.mp4"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "node": {
+            "collated_results": [
+              {
+                "ad_archive_id": "1234567890123405",
+                "page_id": "111222333",
+                "is_active": false
+              }
+            ]
+          }
+        }
+      ],
+      "page_info": {
+        "has_next_page": true,
+        "end_cursor": "AQHRncExampleCursorTokenZZ=="
+      }
+    }
+  }
+}

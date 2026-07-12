@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<!--
+  Representative fragment of the facebook.com/ads/library page markup used to
+  unit-test session bootstrapping (lsd token + doc_id discovery). This is a
+  hand-built stand-in with the same token/doc_id shapes seen in the real page;
+  run `npm run smoke -- --capture` on an unrestricted network to replace it
+  with a live capture.
+-->
+<html>
+<head><title>Ad Library</title></head>
+<body>
+<script>
+requireLazy(["HasteSupportData"],function(m){m.handle({"bootloadable":{}})});
+__d("LSDModule",[],function(a,b,c,d,e,f){e.exports=["LSD",[],{"token":"AVxExampleLsdToken_9Q"},258]});
+</script>
+<script>
+__d("AdLibrarySearchPaginationQuery_facebookRelayOperation",[],function(){},{"id":"25464068859919530"});
+</script>
+<script>
+requireLazy(["ServerJS"],function(sjs){sjs.handle({"require":[["RelayPrefetchedStreamCache","next",[],[{"queryID":"9407590475934210","name":"AdLibraryAdDetailsV2Query"}]]]})});
+</script>
+</body>
+</html>
