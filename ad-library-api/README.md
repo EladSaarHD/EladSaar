@@ -200,6 +200,15 @@ included fixtures are representative samples of the real payload structure; run
 `npm run smoke -- --capture` on a network that can reach `facebook.com` to replace
 them with a live capture.
 
+## Runtime compatibility
+
+Meta changes the Ad Library frontend frequently. The client handles the current
+bounded client challenge, extracts initial search and deeplink detail data from
+server-rendered payloads, and discovers current operation IDs from Meta's loaded
+JavaScript assets. Continuation cursors are opaque and never expose upstream
+cookies. A process-only health check is not enough: production monitoring should
+also run a low-frequency live canary search.
+
 ## Maintenance
 
 When search suddenly returns nothing or `upstream_blocked`, in order:

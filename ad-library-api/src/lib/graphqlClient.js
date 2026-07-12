@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const config = require('../../config');
 const session = require('./session');
 const { httpFetch } = require('./http');
@@ -9,6 +10,7 @@ const {
   GRAPHQL_URL,
   LIBRARY_URL,
   FRIENDLY_NAMES,
+  FALLBACK_DOC_IDS,
   ASBD_ID,
   UPSTREAM_ERROR_CODES,
 } = require('../constants');
@@ -40,6 +42,186 @@ function isStaleSession(json) {
   return json.errors.some(
     (e) => e && (e.code === UPSTREAM_ERROR_CODES.STALE_SESSION || e.api_error_code === UPSTREAM_ERROR_CODES.STALE_SESSION)
   );
+}
+
+function findSearchMain(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (value.ad_library_main?.search_results_connection) return value.ad_library_main;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findSearchMain(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findDeeplinkAd(value) {
+  if (!value || typeof value !== 'object') return null;
+  const ad = value.ad_library_main?.deeplink_ad_archive_result?.deeplink_ad_archive;
+  if (ad) return ad;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findDeeplinkAd(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function applicationJsonPayloads(html) {
+  const payloads = [];
+  const scripts = String(html || '').matchAll(
+    /<script\b[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi
+  );
+  for (const match of scripts) {
+    try {
+      payloads.push(JSON.parse(match[1]));
+    } catch {
+      // Ignore unrelated or malformed JSON script tags.
+    }
+  }
+  return payloads;
+}
+
+function parseDetailsHtml(html) {
+  for (const payload of applicationJsonPayloads(html)) {
+    const ad = findDeeplinkAd(payload);
+    if (ad) return { ad_library_main: { ad_details: { ad } } };
+  }
+  throw new UpstreamBlockedError('Could not extract ad details from Ad Library HTML');
+}
+
+function discoverRuntimeMetadata(html, javascriptSources = []) {
+  const combined = [String(html || ''), ...javascriptSources.map(String)].join('\n');
+  const findId = (name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const after = combined.match(new RegExp(`${escaped}[^0-9]{0,300}(\\d{15,20})`));
+    if (after) return after[1];
+    const before = combined.match(new RegExp(`(\\d{15,20})[^0-9]{0,300}${escaped}`));
+    return before ? before[1] : null;
+  };
+  const versionMatch = combined.match(/["']v["']\s*:\s*["']([a-f0-9]{6})["']/i);
+  return {
+    docIds: {
+      search: findId('AdLibrarySearchPaginationQuery'),
+      details: findId('AdLibraryV3AdDetailsQuery'),
+    },
+    frontendVersion: versionMatch ? versionMatch[1] : null,
+  };
+}
+
+function extractScriptUrls(html) {
+  const urls = [];
+  for (const match of String(html || '').matchAll(/<script\b[^>]*src=["']([^"']+\.js[^"']*)["']/gi)) {
+    const raw = match[1].replace(/&amp;/g, '&');
+    try {
+      const url = new URL(raw, LIBRARY_URL);
+      if (url.protocol === 'https:' && url.hostname.endsWith('fbcdn.net')) urls.push(url.href);
+    } catch {
+      // Ignore malformed URLs.
+    }
+  }
+  return [...new Set(urls)];
+}
+
+let runtimeMetadata = null;
+let runtimeMetadataAt = 0;
+const continuationSessions = new Map();
+
+async function refreshRuntimeMetadata({ force = false } = {}) {
+  if (!force && runtimeMetadata && Date.now() - runtimeMetadataAt < 6 * 60 * 60 * 1000) {
+    return runtimeMetadata;
+  }
+  const { res, html } = await session.fetchDocument(
+    `${LIBRARY_URL}?active_status=all&ad_type=all&country=${config.defaultCountry}&media_type=all`
+  );
+  if (!res.ok) return runtimeMetadata;
+  const urls = extractScriptUrls(html).slice(0, 20);
+  const settled = await Promise.allSettled(
+    urls.map(async (url) => {
+      const response = await httpFetch(url, { headers: { 'user-agent': session.userAgent } });
+      return response.ok ? response.text() : '';
+    })
+  );
+  const sources = settled.filter((x) => x.status === 'fulfilled').map((x) => x.value);
+  const discovered = discoverRuntimeMetadata(html, sources);
+  runtimeMetadata = {
+    docIds: {
+      search: discovered.docIds.search || FALLBACK_DOC_IDS.search,
+      details: discovered.docIds.details || FALLBACK_DOC_IDS.details,
+    },
+    frontendVersion: discovered.frontendVersion || null,
+  };
+  runtimeMetadataAt = Date.now();
+  return runtimeMetadata;
+}
+
+function findSearchConfig(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (value.sessionId && (Object.hasOwn(value, 'query') || Object.hasOwn(value, 'queryString'))) {
+    return value;
+  }
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findSearchConfig(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+function parseInitialSearchHtml(html) {
+  let main = null;
+  let configState = null;
+  for (const payload of applicationJsonPayloads(html)) {
+    main ||= findSearchMain(payload);
+    configState ||= findSearchConfig(payload);
+  }
+  if (main) {
+    return {
+      ad_library_main: main,
+      __continuation: configState
+        ? {
+            sessionID: configState.sessionId,
+            collationToken: configState.collationToken ?? null,
+          }
+        : null,
+    };
+  }
+  throw new UpstreamBlockedError('Could not extract initial search data from Ad Library HTML');
+}
+
+async function requestInitialSearch(variables) {
+  const params = new URLSearchParams({
+    active_status: variables.activeStatus || 'all',
+    ad_type: String(variables.adType || 'ALL').toLowerCase(),
+    country: variables.countries?.[0] || config.defaultCountry || 'US',
+    is_targeted_country: String(Boolean(variables.isTargetedCountry)),
+    media_type: variables.mediaType || 'all',
+    q: variables.queryString || '',
+    search_type: variables.searchType || 'keyword_unordered',
+  });
+  if (variables.viewAllPageID && variables.viewAllPageID !== '0') {
+    params.set('view_all_page_id', variables.viewAllPageID);
+  }
+  const url = `${LIBRARY_URL}?${params.toString()}`;
+  const { res, html, cookie } = await session.fetchDocument(url);
+  if (!res.ok) {
+    throw new UpstreamBlockedError(`Initial search GET failed with HTTP ${res.status}`);
+  }
+  const data = parseInitialSearchHtml(html);
+  const lsd = session.extractLsd(html);
+  if (data.__continuation && lsd && cookie) {
+    const stateID = crypto.randomUUID();
+    continuationSessions.set(stateID, { lsd, cookie, fetchedAt: Date.now() });
+    data.__continuation.stateID = stateID;
+  }
+  return data;
+}
+
+async function requestInitialDetails(variables) {
+  const params = new URLSearchParams({ id: String(variables.adArchiveID) });
+  const url = `${LIBRARY_URL}?${params.toString()}`;
+  const { res, html } = await session.fetchDocument(url);
+  if (!res.ok) {
+    throw new UpstreamBlockedError(`Ad details GET failed with HTTP ${res.status}`);
+  }
+  return parseDetailsHtml(html);
 }
 
 // Build the form body with the minimal set of params known to work
@@ -81,11 +263,22 @@ async function postGraphql({ friendlyName, docId, variables, sess }) {
 // One rate-limited attempt: fetch, classify HTTP status, parse. Throws typed
 // errors the retry loop understands.
 async function attempt({ kind, variables, force }) {
-  const sess = await session.getSession({ force });
+  const storedSession = variables.continuationStateID
+    ? continuationSessions.get(variables.continuationStateID)
+    : null;
+  const sess = storedSession || (await session.getSession({ force }));
   const friendlyName = FRIENDLY_NAMES[kind];
-  const docId = sess.docIds[kind];
+  const runtime = await refreshRuntimeMetadata();
+  const docId = runtime?.docIds?.[kind] || sess.docIds?.[kind] || FALLBACK_DOC_IDS[kind];
+  const withRuntimeVersion =
+    runtime?.frontendVersion && kind === 'search'
+      ? { ...variables, v: runtime.frontendVersion }
+      : variables;
+  const { continuationStateID: _stateID, ...currentVariables } = withRuntimeVersion;
 
-  const res = await limiter.schedule(() => postGraphql({ friendlyName, docId, variables, sess }));
+  const res = await limiter.schedule(() =>
+    postGraphql({ friendlyName, docId, variables: currentVariables, sess })
+  );
 
   if (res.status === 403) {
     const err = new TokenExpiredError('Upstream returned HTTP 403 (session likely stale)');
@@ -120,6 +313,13 @@ async function attempt({ kind, variables, force }) {
     throw err;
   }
 
+  if (kind === 'search' && json.data) {
+    json.data.__continuation = {
+      sessionID: currentVariables.sessionID,
+      collationToken: currentVariables.collationToken ?? null,
+      stateID: variables.continuationStateID || null,
+    };
+  }
   return json.data;
 }
 
@@ -127,6 +327,13 @@ async function attempt({ kind, variables, force }) {
 //   - stale session / 403  → invalidate + re-bootstrap, retry once
 //   - 429 / transient      → exponential backoff with jitter, up to maxRetries
 async function request({ kind, variables }) {
+  if (kind === 'search' && !variables.cursor) {
+    return requestInitialSearch(variables);
+  }
+  if (kind === 'details') {
+    return requestInitialDetails(variables);
+  }
+
   let refreshed = false;
   let lastErr;
 
@@ -162,4 +369,15 @@ function pseudoRandom(i) {
   return x - Math.floor(x);
 }
 
-module.exports = { request, parseResponse, isStaleSession };
+module.exports = {
+  request,
+  parseResponse,
+  isStaleSession,
+  parseInitialSearchHtml,
+  parseDetailsHtml,
+  discoverRuntimeMetadata,
+  extractScriptUrls,
+  refreshRuntimeMetadata,
+  findSearchMain,
+  findDeeplinkAd,
+};

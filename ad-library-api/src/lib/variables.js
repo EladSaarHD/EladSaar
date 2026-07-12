@@ -55,30 +55,46 @@ function country(params) {
   return (params.country || config.defaultCountry || 'US').toUpperCase();
 }
 
+function decodeContinuation(value) {
+  if (!String(value || '').startsWith('mal1.')) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(String(value).slice(5), 'base64url').toString('utf8'));
+    return decoded && typeof decoded === 'object' ? decoded : null;
+  } catch {
+    throw new InvalidParamsError('Invalid continuation cursor');
+  }
+}
+
 // Fields common to search and page-ads queries.
 function baseVariables(params) {
+  const continuation = decodeContinuation(params.cursor);
   return {
     activeStatus: mapEnum('activeStatus', params.active_status, DEFAULTS.activeStatus),
     adType: mapEnum('adType', params.ad_type, DEFAULTS.adType),
     mediaType: mapEnum('mediaType', params.media_type, DEFAULTS.mediaType),
     countries: [country(params)],
-    country: country(params),
     publisherPlatforms: platforms(params.platform),
     startDate: dateRange(params),
     first: clampFirst(params.first),
-    cursor: params.cursor || null,
-    sessionID: crypto.randomUUID(),
-    collationToken: crypto.randomUUID(),
-    // Empty defaults FB expects to be present.
+    cursor: continuation?.cursor || params.cursor || null,
+    sessionID: continuation?.sessionID || crypto.randomUUID(),
+    collationToken: continuation ? continuation.collationToken ?? null : null,
+    continuationStateID: continuation?.stateID || null,
+    // Empty defaults currently expected by Meta's Relay operation.
     bylines: [],
     contentLanguages: [],
-    excludedIDs: [],
+    excludedIDs: null,
+    isTargetedCountry: false,
     location: null,
-    potentialReachInput: [],
-    regions: [],
-    sortData: null,
+    multiCountryFilterMode: null,
+    potentialReachInput: null,
+    regions: null,
+    sortData: {
+      direction: 'DESCENDING',
+      mode: 'SORT_BY_TOTAL_IMPRESSIONS',
+    },
     source: null,
-    v: '',
+    v: 'd427bf',
   };
 }
 
@@ -88,7 +104,7 @@ function buildSearchVariables(params) {
     throw new InvalidParamsError('Provide "q" (keyword) or "page_id" to search');
   }
   const searchType = params.page_id
-    ? 'PAGE'
+    ? 'page'
     : mapEnum('searchType', params.search_type, DEFAULTS.searchType);
 
   return {
@@ -105,7 +121,7 @@ function buildPageVariables(pageId, params) {
   return {
     ...baseVariables(params),
     queryString: '',
-    searchType: 'PAGE',
+    searchType: 'page',
     pageIDs: [String(pageId)],
     viewAllPageID: String(pageId),
   };

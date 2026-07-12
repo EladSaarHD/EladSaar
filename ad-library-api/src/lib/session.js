@@ -52,7 +52,7 @@ function discoverDocIds(html) {
 // Turn a set-cookie header list into a "k=v; k=v" Cookie string, keeping only
 // what unauthenticated calls need (datr is the important one).
 function cookieFromSetCookie(setCookieHeaders) {
-  const wanted = ['datr', 'wd', 'dpr', 'sb'];
+  const wanted = ['datr', 'wd', 'dpr', 'sb', 'rd_challenge'];
   const jar = {};
   for (const line of setCookieHeaders) {
     const [pair] = line.split(';');
@@ -67,6 +67,30 @@ function cookieFromSetCookie(setCookieHeaders) {
     .join('; ');
 }
 
+function mergeCookieStrings(...strings) {
+  const jar = {};
+  for (const value of strings) {
+    for (const pair of String(value || '').split(';')) {
+      const trimmed = pair.trim();
+      const eq = trimmed.indexOf('=');
+      if (eq > 0) jar[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+    }
+  }
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+}
+
+// Facebook sometimes returns a tiny 403 page that asks the browser to POST a
+// same-origin client challenge, set rd_challenge, then reload. Reproduce that
+// bounded handshake without executing arbitrary page JavaScript.
+function extractChallengePath(html) {
+  const m = String(html || '').match(
+    /fetch\(\s*['"](\/[A-Za-z0-9_./?=&%-]+challenge=\d+)['"]/i
+  );
+  return m ? m[1] : null;
+}
+
 function getSetCookies(res) {
   if (typeof res.headers.getSetCookie === 'function') return res.headers.getSetCookie();
   const raw = res.headers.get('set-cookie');
@@ -78,32 +102,79 @@ function getSetCookies(res) {
 const userAgent = config.userAgent || DEFAULT_USER_AGENT;
 let cached = null; // { lsd, docIds, cookie, fetchedAt }
 
+function documentHeaders() {
+  return {
+    'user-agent': userAgent,
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'upgrade-insecure-requests': '1',
+  };
+}
+
+async function fetchDocument(url) {
+  const headers = documentHeaders();
+  let res;
+  let html = '';
+  let challengeCookie = '';
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    res = await httpFetch(url, { headers, redirect: 'follow' });
+    html = await res.text();
+    if (res.ok) break;
+
+    const challengePath = res.status === 403 ? extractChallengePath(html) : null;
+    if (!challengePath) break;
+
+    const challengeUrl = new URL(challengePath, LIBRARY_URL);
+    if (challengeUrl.origin !== new URL(LIBRARY_URL).origin) break;
+
+    const challengeRes = await httpFetch(challengeUrl, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        accept: '*/*',
+        referer: url,
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+      },
+    });
+    const receivedCookie = cookieFromSetCookie(getSetCookies(challengeRes));
+    await challengeRes.text();
+
+    if (challengeRes.ok && receivedCookie) {
+      challengeCookie = mergeCookieStrings(challengeCookie, receivedCookie);
+      res = await httpFetch(url, {
+        headers: { ...headers, cookie: challengeCookie },
+        redirect: 'follow',
+      });
+      html = await res.text();
+      if (res.ok) break;
+    }
+
+    if (attempt < 7) await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  return { res, html, cookie: challengeCookie };
+}
+
 async function bootstrap() {
   const url = `${LIBRARY_URL}?active_status=all&ad_type=all&country=${config.defaultCountry}&media_type=all`;
-  const res = await httpFetch(url, {
-    headers: {
-      'user-agent': userAgent,
-      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'accept-language': 'en-US,en;q=0.9',
-      'sec-fetch-dest': 'document',
-      'sec-fetch-mode': 'navigate',
-      'sec-fetch-site': 'none',
-      'upgrade-insecure-requests': '1',
-    },
-    redirect: 'follow',
-  });
+  const { res, html, cookie: challengeCookie } = await fetchDocument(url);
 
   if (!res.ok) {
     throw new UpstreamBlockedError(`Bootstrap GET failed with HTTP ${res.status}`);
   }
 
-  const html = await res.text();
   const lsd = extractLsd(html);
   if (!lsd) {
     throw new UpstreamBlockedError('Could not extract lsd token from ads/library page');
   }
 
-  let cookie = cookieFromSetCookie(getSetCookies(res));
+  let cookie = mergeCookieStrings(challengeCookie, cookieFromSetCookie(getSetCookies(res)));
   if (!cookie) {
     // Fall back to a synthetic datr so the GraphQL call still has a cookie.
     cookie = `datr=${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
@@ -136,6 +207,7 @@ module.exports = {
   getSession,
   invalidate,
   bootstrap,
+  fetchDocument,
   peek,
   userAgent,
   // exported for unit tests:
@@ -143,4 +215,6 @@ module.exports = {
   discoverDocIds,
   findDocId,
   cookieFromSetCookie,
+  mergeCookieStrings,
+  extractChallengePath,
 };
