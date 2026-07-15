@@ -41,6 +41,11 @@ function Pill({ children, tone = 'neutral' }) {
   return <span className={`pill pill-${tone}`}>{children}</span>;
 }
 
+export function DiscardedCount({ count }) {
+  const value = Number(count) || 0;
+  return value > 0 ? <span className="discarded-count">{value.toLocaleString()} outside launch window excluded</span> : null;
+}
+
 function App() {
   const [filters, setFilters] = useState(initialFilters);
   const [ads, setAds] = useState([]);
@@ -273,7 +278,7 @@ function App() {
 
         {error && <div className="error-banner"><Activity size={18} />{error}</div>}
         {scanJob && ['queued', 'running'].includes(scanJob.status) && <section className="scan-progress">
-          <div className="scan-progress-head"><div><LoaderCircle className="spin" size={19} /><span><strong>Deep scan running</strong><small>{scanJob.unique_ads.toLocaleString()} unique ads collected</small></span></div><b>{scanJob.progress}%</b></div>
+          <div className="scan-progress-head"><div><LoaderCircle className="spin" size={19} /><span><strong>Deep scan running</strong><small>{scanJob.unique_ads.toLocaleString()} unique ads collected{scanJob.discarded_ads > 0 && <> · <DiscardedCount count={scanJob.discarded_ads} /></>}</small></span></div><b>{scanJob.progress}%</b></div>
           <div className="progress-track"><i style={{ width: `${scanJob.progress}%` }} /></div>
           <p>Shard {scanJob.completed_shards} of {scanJob.total_shards} · Partial results appear below as they arrive and are stored locally.</p>
         </section>}
@@ -307,7 +312,7 @@ function App() {
             <span className={`recent-state state-${job.status}`}>{job.status}</span>
             <strong>{job.config?.mode === 'dropshipping' ? 'Store finder' : 'Deep scan'}</strong>
             <p>{job.config?.queries?.join(' · ') || 'Broad market discovery'}</p>
-            <footer><span>{job.unique_ads.toLocaleString()} ads</span><span>{formatDate(job.updated_at)}</span></footer>
+            <footer><span>{job.unique_ads.toLocaleString()} ads{job.discarded_ads > 0 && <> · <DiscardedCount count={job.discarded_ads} /></>}</span><span>{formatDate(job.updated_at)}</span></footer>
           </button>)}</div>
         </section>}
 

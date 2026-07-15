@@ -3,8 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
-  buildScanShards, collectShardPages, expandQueries, extractStoreDomain, normalizeScanWindow,
-  scoreDropshippingAd, scoreMomentum,
+  buildScanShards, collectShardPages, expandQueries, extractStoreDomain, filterAdsToShardWindow,
+  isWithinShardWindow, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
 } = require('../src/lib/deepScan');
 
 test('buildScanShards expands seeds across countries and bounded date windows', () => {
@@ -98,6 +98,26 @@ test('collectShardPages preserves initial results when a continuation cursor fai
   assert.strictEqual(result.uniqueAds, 2);
   assert.strictEqual(result.exhausted, true);
   assert.strictEqual(result.pageError, cursorError);
+});
+
+test('strict shard windows reject missing, invalid, older and newer ad start dates', () => {
+  const shard = { startDate: '2026-07-01', endDate: '2026-07-15' };
+  const ads = [
+    { ad_archive_id: 'start', start_date: '2026-07-01' },
+    { ad_archive_id: 'middle', start_date: '2026-07-10' },
+    { ad_archive_id: 'end', start_date: '2026-07-15' },
+    { ad_archive_id: 'old', start_date: '2025-09-12' },
+    { ad_archive_id: 'future', start_date: '2026-07-16' },
+    { ad_archive_id: 'missing' },
+    { ad_archive_id: 'malformed', start_date: '2026-7-1' },
+    { ad_archive_id: 'impossible', start_date: '2026-02-30' },
+  ];
+
+  assert.strictEqual(isWithinShardWindow(ads[0], shard), true);
+  assert.strictEqual(isWithinShardWindow(ads[2], shard), true);
+  const filtered = filterAdsToShardWindow(ads, shard);
+  assert.deepStrictEqual(filtered.ads.map((ad) => ad.ad_archive_id), ['start', 'middle', 'end']);
+  assert.strictEqual(filtered.discarded, 5);
 });
 
 test('normalizeScanWindow accepts only the requested launch windows', () => {

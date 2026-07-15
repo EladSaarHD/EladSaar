@@ -30,6 +30,7 @@ db.exec(`
     total_shards INTEGER NOT NULL,
     completed_shards INTEGER NOT NULL DEFAULT 0,
     unique_ads INTEGER NOT NULL DEFAULT 0,
+    discarded_ads INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -59,5 +60,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_scan_ads_impressions ON scan_ads(scan_id, impressions_upper DESC);
   CREATE INDEX IF NOT EXISTS idx_scan_ads_recent ON scan_ads(scan_id, start_date DESC);
 `);
+
+const scanJobColumns = new Set(db.pragma('table_info(scan_jobs)').map((column) => column.name));
+if (!scanJobColumns.has('discarded_ads')) {
+  db.exec('ALTER TABLE scan_jobs ADD COLUMN discarded_ads INTEGER NOT NULL DEFAULT 0');
+}
 
 module.exports = db;

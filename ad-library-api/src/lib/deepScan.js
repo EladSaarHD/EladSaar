@@ -3,6 +3,26 @@
 function iso(date) { return date.toISOString().slice(0, 10); }
 function addDays(date, days) { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; }
 
+function validIsoDate(value) {
+  const text = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && iso(date) === text ? text : null;
+}
+
+function isWithinShardWindow(ad, shard) {
+  const start = validIsoDate(ad?.start_date);
+  const shardStart = validIsoDate(shard?.startDate);
+  const shardEnd = validIsoDate(shard?.endDate);
+  return Boolean(start && shardStart && shardEnd && start >= shardStart && start <= shardEnd);
+}
+
+function filterAdsToShardWindow(ads, shard) {
+  const source = Array.isArray(ads) ? ads : [];
+  const valid = source.filter((ad) => isWithinShardWindow(ad, shard));
+  return { ads: valid, discarded: source.length - valid.length };
+}
+
 function buildScanShards({ queries, countries, lookbackDays = 180, windowDays = 30, maxShards = 300, today }) {
   const end = new Date(`${today || new Date().toISOString().slice(0, 10)}T00:00:00Z`);
   const windows = [];
@@ -134,6 +154,6 @@ async function collectShardPages({
 }
 
 module.exports = {
-  buildScanShards, collectShardPages, expandQueries, extractStoreDomain, normalizeScanWindow,
-  scoreDropshippingAd, scoreMomentum,
+  buildScanShards, collectShardPages, expandQueries, extractStoreDomain, filterAdsToShardWindow,
+  isWithinShardWindow, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
 };

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { StoreCard } from './App.jsx';
+import { DiscardedCount, StoreCard } from './App.jsx';
 
 describe('StoreCard', () => {
   it('renders completed dropshipping store results without crashing the app', () => {
@@ -18,5 +18,12 @@ describe('StoreCard', () => {
     };
 
     expect(() => renderToStaticMarkup(<StoreCard store={store} onOpen={() => {}} />)).not.toThrow();
+  });
+});
+
+describe('DiscardedCount', () => {
+  it('reports strict launch-window exclusions and hides zero counts', () => {
+    expect(renderToStaticMarkup(<DiscardedCount count={484} />)).toContain('484 outside launch window excluded');
+    expect(renderToStaticMarkup(<DiscardedCount count={0} />)).toBe('');
   });
 });

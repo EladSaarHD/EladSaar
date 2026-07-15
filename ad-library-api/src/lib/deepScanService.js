@@ -5,16 +5,17 @@ const db = require('../db');
 const { buildSearchVariables } = require('./variables');
 const { runListQuery } = require('./listQuery');
 const {
-  buildScanShards, collectShardPages, expandQueries, extractStoreDomain, normalizeScanWindow,
-  scoreDropshippingAd, scoreMomentum,
+  buildScanShards, collectShardPages, expandQueries, extractStoreDomain, filterAdsToShardWindow,
+  normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
 } = require('./deepScan');
 
 const createJobStmt = db.prepare(`INSERT INTO scan_jobs
-  (id,status,config_json,total_shards,completed_shards,unique_ads,created_at,updated_at)
-  VALUES (@id,'queued',@config_json,@total_shards,0,0,@now,@now)`);
+  (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at)
+  VALUES (@id,'queued',@config_json,@total_shards,0,0,0,@now,@now)`);
 const getJobStmt = db.prepare('SELECT * FROM scan_jobs WHERE id = ?');
 const updateProgressStmt = db.prepare(`UPDATE scan_jobs SET status=@status, completed_shards=@completed,
-  unique_ads=(SELECT COUNT(*) FROM scan_ads WHERE scan_id=@id), error=@error, updated_at=@now WHERE id=@id`);
+  unique_ads=(SELECT COUNT(*) FROM scan_ads WHERE scan_id=@id), discarded_ads=@discarded,
+  error=@error, updated_at=@now WHERE id=@id`);
 const getActiveJobStmt = db.prepare("SELECT * FROM scan_jobs WHERE status IN ('queued','running') ORDER BY created_at ASC LIMIT 1");
 const getAdStmt = db.prepare('SELECT * FROM scan_ads WHERE scan_id=? AND ad_archive_id=?');
 const upsertAdStmt = db.prepare(`INSERT INTO scan_ads
@@ -38,7 +39,8 @@ db.prepare(`UPDATE scan_jobs SET status='failed',
 function parseJob(row) {
   if (!row) return null;
   return { id: row.id, status: row.status, config: JSON.parse(row.config_json), total_shards: row.total_shards,
-    completed_shards: row.completed_shards, unique_ads: row.unique_ads, error: row.error,
+    completed_shards: row.completed_shards, unique_ads: row.unique_ads, discarded_ads: row.discarded_ads || 0,
+    error: row.error,
     progress: row.total_shards ? Math.round(row.completed_shards / row.total_shards * 100) : 0,
     created_at: row.created_at, updated_at: row.updated_at };
 }
@@ -73,8 +75,9 @@ function saveAd(scanId, ad, query, country) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runScan(id, shards, config) {
-  updateProgressStmt.run({ id, status: 'running', completed: 0, error: null, now: Date.now() });
+  updateProgressStmt.run({ id, status: 'running', completed: 0, discarded: 0, error: null, now: Date.now() });
   let completed = 0;
+  let discarded = 0;
   let skipped = 0;
   let continuationFailures = 0;
   let lastError = null;
@@ -107,7 +110,11 @@ async function runScan(id, shards, config) {
           targetAds: config.targetAds,
           maxPages: config.maxPagesPerShard || 3,
           fetchPage,
-          saveAds: (ads) => ads.forEach((ad) => saveAd(id, ad, shard.query, shard.country)),
+          saveAds: (ads) => {
+            const filtered = filterAdsToShardWindow(ads, shard);
+            discarded += filtered.discarded;
+            filtered.ads.forEach((ad) => saveAd(id, ad, shard.query, shard.country));
+          },
           getUniqueCount: countUnique,
           pause: () => sleep(config.pagePauseMs ?? 1000),
         });
@@ -121,7 +128,8 @@ async function runScan(id, shards, config) {
       const warnings = [];
       if (skipped) warnings.push(`${skipped} shard(s) skipped after bounded retries${lastError ? `: ${String(lastError.message || lastError).slice(0, 160)}` : ''}`);
       if (continuationFailures) warnings.push(`${continuationFailures} continuation cursor(s) exhausted; first-page results were preserved`);
-      updateProgressStmt.run({ id, status: unique >= config.targetAds ? 'complete' : 'running', completed, error: warnings.join('. ') || null, now: Date.now() });
+      if (discarded) warnings.push(`Discarded ${discarded} out-of-window ad(s) with missing, invalid, or non-matching start_date`);
+      updateProgressStmt.run({ id, status: unique >= config.targetAds ? 'complete' : 'running', completed, discarded, error: warnings.join('. ') || null, now: Date.now() });
       if (unique >= config.targetAds) break;
       await sleep(config.requestPauseMs ?? 1000);
     }
@@ -129,12 +137,13 @@ async function runScan(id, shards, config) {
     const notes = [];
     if (skipped) notes.push(`${skipped} shard(s) skipped after bounded retries; collected results remain usable`);
     if (continuationFailures) notes.push(`${continuationFailures} continuation cursor(s) were unavailable; initial-page results were preserved without prolonged retries`);
+    if (discarded) notes.push(`Discarded ${discarded} out-of-window ad(s) with missing, invalid, or non-matching start_date.`);
     if (unique < config.targetAds) {
       notes.push(`Collected ${unique} unique ads of the ${config.targetAds} target. The selected countries, filters and ${config.lookbackDays}-day launch window were exhausted; no duplicate or invented ads were added.`);
     }
-    updateProgressStmt.run({ id, status: 'complete', completed, error: notes.join(' ') || null, now: Date.now() });
+    updateProgressStmt.run({ id, status: 'complete', completed, discarded, error: notes.join(' ') || null, now: Date.now() });
   } catch (error) {
-    updateProgressStmt.run({ id, status: 'failed', completed, error: String(error.message || error).slice(0, 500), now: Date.now() });
+    updateProgressStmt.run({ id, status: 'failed', completed, discarded, error: String(error.message || error).slice(0, 500), now: Date.now() });
   }
 }
 
