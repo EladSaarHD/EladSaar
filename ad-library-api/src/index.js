@@ -11,6 +11,7 @@ const healthRouter = require('./routes/health');
 const searchRouter = require('./routes/search');
 const pagesRouter = require('./routes/pages');
 const adsRouter = require('./routes/ads');
+const scansRouter = require('./routes/scans');
 
 // A scraping error must never take down the server — log and keep serving.
 process.on('uncaughtException', (err) => {
@@ -34,6 +35,7 @@ app.use('/api/health', healthRouter);
 app.use('/api/search', searchRouter);
 app.use('/api/pages', pagesRouter);
 app.use('/api/ads', adsRouter);
+app.use('/api/scans', scansRouter);
 
 // 404 for unknown /api routes.
 app.use('/api', (req, res) => {

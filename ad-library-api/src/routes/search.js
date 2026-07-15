@@ -26,6 +26,7 @@ router.get(
       search_type: q.search_type || null,
       start_date: q.start_date || null,
       end_date: q.end_date || null,
+      sort: q.sort || 'impressions',
       cursor: q.cursor || null,
       first: q.first || null,
     };

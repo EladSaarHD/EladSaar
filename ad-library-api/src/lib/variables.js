@@ -55,6 +55,17 @@ function country(params) {
   return (params.country || config.defaultCountry || 'US').toUpperCase();
 }
 
+function sortData(value) {
+  const mode = String(value || 'impressions').toLowerCase();
+  if (mode === 'recent') {
+    return { direction: 'DESCENDING', mode: 'SORT_BY_TIME_ACTIVE' };
+  }
+  if (mode === 'impressions') {
+    return { direction: 'DESCENDING', mode: 'SORT_BY_TOTAL_IMPRESSIONS' };
+  }
+  throw new InvalidParamsError('Invalid sort. Allowed: impressions, recent');
+}
+
 function decodeContinuation(value) {
   if (!String(value || '').startsWith('mal1.')) return null;
   try {
@@ -89,10 +100,7 @@ function baseVariables(params) {
     multiCountryFilterMode: null,
     potentialReachInput: null,
     regions: null,
-    sortData: {
-      direction: 'DESCENDING',
-      mode: 'SORT_BY_TOTAL_IMPRESSIONS',
-    },
+    sortData: sortData(params.sort),
     source: null,
     v: 'd427bf',
   };

@@ -195,12 +195,17 @@ async function requestInitialSearch(variables) {
     media_type: variables.mediaType || 'all',
     q: variables.queryString || '',
     search_type: variables.searchType || 'keyword_unordered',
+    'sort_data[direction]': 'desc',
+    'sort_data[mode]': variables.sortData?.mode === 'SORT_BY_TIME_ACTIVE' ? 'time_active' : 'total_impressions',
   });
   if (variables.viewAllPageID && variables.viewAllPageID !== '0') {
     params.set('view_all_page_id', variables.viewAllPageID);
   }
+  if (variables.startDate?.min != null) params.set('start_date[min]', String(variables.startDate.min));
+  if (variables.startDate?.max != null) params.set('start_date[max]', String(variables.startDate.max));
+  for (const platform of variables.publisherPlatforms || []) params.append('platforms[0]', String(platform).toLowerCase());
   const url = `${LIBRARY_URL}?${params.toString()}`;
-  const { res, html, cookie } = await session.fetchDocument(url);
+  const { res, html, cookie } = await limiter.schedule(() => session.fetchDocument(url));
   if (!res.ok) {
     throw new UpstreamBlockedError(`Initial search GET failed with HTTP ${res.status}`);
   }
@@ -308,9 +313,10 @@ async function attempt({ kind, variables, force }) {
     throw new UpstreamBlockedError(`Upstream GraphQL error: ${msg || 'unknown'}`);
   }
   if (!json || !json.data) {
-    const err = new UpstreamBlockedError('Upstream returned an empty payload');
-    err.retryable = 'backoff';
-    throw err;
+    // A syntactically valid empty response usually means Meta rejected this
+    // continuation state. Backoff cannot repair that cursor and previously
+    // multiplied scan time at both the GraphQL and scan layers.
+    throw new UpstreamBlockedError('Upstream returned an empty payload');
   }
 
   if (kind === 'search' && json.data) {

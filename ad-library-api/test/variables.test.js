@@ -85,3 +85,14 @@ test('buildSearchVariables restores opaque continuation state', () => {
   assert.strictEqual(v.sessionID, 'SESSION');
   assert.strictEqual(v.collationToken, null);
 });
+
+test('buildSearchVariables maps Ad Library impression and recent sort modes', () => {
+  const impressions = buildSearchVariables({ q: 'running shoes', sort: 'impressions' });
+  const recent = buildSearchVariables({ q: 'running shoes', sort: 'recent' });
+  assert.deepStrictEqual(impressions.sortData, {
+    direction: 'DESCENDING', mode: 'SORT_BY_TOTAL_IMPRESSIONS',
+  });
+  assert.deepStrictEqual(recent.sortData, {
+    direction: 'DESCENDING', mode: 'SORT_BY_TIME_ACTIVE',
+  });
+});

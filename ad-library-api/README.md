@@ -35,9 +35,10 @@ Do not expose the service directly to the public internet without authentication
 
 ## Web interface
 
-The responsive React interface supports multi-query searches, country/status/media/
-platform/date filters, evidence and longevity sorting, creative previews, full ad
-details, Meta deeplinks, and compact Hunter analysis briefs.
+The responsive React interface supports multi-query searches, selectable target counts,
+country chips, 3/7/14/21/30/60/90-day launch windows, Meta-native impression/recent
+sorting, deep scans with pagination and deduplication, storefront clustering, creative
+previews, full ad details, Meta deeplinks, and compact Hunter analysis briefs.
 
 ```bash
 npm --prefix web install
@@ -67,6 +68,7 @@ Search ads by keyword or page, with filters and cursor pagination.
 | `search_type` | `keyword_unordered` \| `keyword_exact_phrase` | `keyword_unordered` |
 | `platform` | Comma list: `facebook,instagram,messenger,audience_network,threads` | — |
 | `start_date`, `end_date` | Filter by ad start date (`YYYY-MM-DD`) | — |
+| `sort` | `impressions` (high to low) \| `recent` (most recent first) | `impressions` |
 | `cursor` | `end_cursor` from a previous response (next page) | — |
 | `first` | Page size (max 50) | 30 |
 | `fresh` | `1` to bypass the cache for this request | — |
@@ -103,6 +105,27 @@ Liveness plus session/cache introspection. Never makes a live call to Facebook.
 ```bash
 curl "http://127.0.0.1:4100/api/health"
 ```
+
+### Background deep scans
+
+`POST /api/scans` starts a local background collection job. Scans expand queries across
+the selected countries, follow Meta continuation cursors, deduplicate by
+`ad_archive_id`, and stop when the target is reached or the public result pool is
+exhausted. The target is a goal, not a promise that matching ads exist.
+
+```bash
+curl -X POST http://127.0.0.1:4100/api/scans \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"dropshipping","queries":["running shoes"],"countries":["US","GB"],"targetAds":1000,"lookbackDays":30}'
+
+curl http://127.0.0.1:4100/api/scans/<job-id>
+curl 'http://127.0.0.1:4100/api/scans/<job-id>/ads?sort=impressions&limit=500'
+curl 'http://127.0.0.1:4100/api/scans/<job-id>/stores?sort=dropship&limit=500'
+```
+
+Valid `lookbackDays` values are exactly `3`, `7`, `14`, `21`, `30`, `60`, and `90`.
+Ad result sorts: `momentum`, `impressions`, `recent`, `dropship`. Store result sorts:
+`dropship`, `volume`, `recent`, `impressions`.
 
 ## Response shape
 
