@@ -6,7 +6,7 @@ const { buildSearchVariables } = require('./variables');
 const { runListQuery } = require('./listQuery');
 const {
   buildScanShards, collectShardPages, expandQueries, extractStoreDomain, filterAdsToShardWindow,
-  normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
+  normalizeQueryTerms, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
 } = require('./deepScan');
 
 const createJobStmt = db.prepare(`INSERT INTO scan_jobs
@@ -156,7 +156,7 @@ function createScan(input) {
     error.activeScan = active;
     throw error;
   }
-  const queries = [...new Set((input.queries || []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 30);
+  const queries = normalizeQueryTerms(input.queries).slice(0, 30);
   const mode = input.mode === 'dropshipping' ? 'dropshipping' : 'deep';
   const expandedQueries = expandQueries(queries, { mode, maxQueries: 300 });
   const countries = [...new Set((input.countries || ['US']).map((x) => String(x).toUpperCase()))].slice(0, 20);
@@ -164,7 +164,7 @@ function createScan(input) {
   const targetAds = Math.max(30, Math.min(Number(input.targetAds) || 1000, 10000));
   const maxShards = Math.min(500, Math.max(1, Math.ceil(targetAds / 12)));
   const lookbackDays = normalizeScanWindow(input.lookbackDays);
-  const config = { mode, queries, expandedQueries, countries, targetAds, lookbackDays,
+  const config = { mode, queries, queryExpression: queries.join(' | '), expandedQueries, countries, targetAds, lookbackDays,
     windowDays: lookbackDays, activeStatus: input.activeStatus || 'active',
     mediaType: input.mediaType || 'all', platform: input.platform || null };
   const shards = buildScanShards({ queries: expandedQueries, countries, lookbackDays,

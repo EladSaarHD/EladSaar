@@ -293,7 +293,7 @@ function App() {
           </section>
 
           <div className="results-toolbar">
-            <div><h2>{resultView === 'stores' ? 'Likely storefronts' : 'Creative results'}</h2><p>{resultView === 'stores' ? `${storeTotal.toLocaleString()} unique merchant domains` : normalizeQueries(filters.queries).join(' · ')}</p></div>
+            <div><h2>{resultView === 'stores' ? 'Likely storefronts' : 'Creative results'}</h2><p>{resultView === 'stores' ? `${storeTotal.toLocaleString()} unique merchant domains` : normalizeQueries(filters.queries).join(' | ')}</p></div>
             <div className="result-actions">{workspaceMode !== 'search' && <div className="view-toggle"><button className={resultView === 'ads' ? 'active' : ''} onClick={() => setResultView('ads')}>Ads</button><button className={resultView === 'stores' ? 'active' : ''} onClick={() => setResultView('stores')}>Stores</button></div>}
             <label className="sort-control"><Filter size={15} /><select value={sort} onChange={(e) => changeSort(e.target.value)}>{workspaceMode === 'search' ? <><option value="evidence">Best evidence</option><option value="impressions">Impressions: high to low</option><option value="recent">Most recent</option><option value="longest">Longest running</option><option value="advertiser">Advertiser A–Z</option></> : <><option value="momentum">High momentum + recent</option><option value="impressions">Impressions: high to low</option><option value="recent">Most recent</option><option value="dropship">Dropshipping likelihood</option></>}</select></label></div>
           </div>
@@ -311,13 +311,13 @@ function App() {
           <div className="recent-scan-grid">{recentScans.slice(0, 4).map((job) => <button key={job.id} className="recent-scan" onClick={() => void openSavedScan(job)} disabled={job.unique_ads === 0}>
             <span className={`recent-state state-${job.status}`}>{job.status}</span>
             <strong>{job.config?.mode === 'dropshipping' ? 'Store finder' : 'Deep scan'}</strong>
-            <p>{job.config?.queries?.join(' · ') || 'Broad market discovery'}</p>
+            <p>{normalizeQueries(job.config?.queryExpression || job.config?.queries || []).join(' | ') || 'Broad market discovery'}</p>
             <footer><span>{job.unique_ads.toLocaleString()} ads{job.discarded_ads > 0 && <> · <DiscardedCount count={job.discarded_ads} /></>}</span><span>{formatDate(job.updated_at)}</span></footer>
           </button>)}</div>
         </section>}
 
         {!searched && !loading && <section className="starter-grid">
-          <div><Layers3 size={22} /><h3>Multi-query search</h3><p>Separate terms with commas or new lines to compare related angles.</p></div>
+          <div><Layers3 size={22} /><h3>Multi-query search</h3><p>Separate terms with pipes, commas, or new lines to compare related angles.</p></div>
           <div><Target size={22} /><h3>Evidence scoring</h3><p>Prioritize active, durable, multi-platform campaigns—not vanity metrics.</p></div>
           <div><Sparkles size={22} /><h3>Hunter-ready</h3><p>Open any result, copy a focused brief, and continue the analysis with Hunter.</p></div>
         </section>}

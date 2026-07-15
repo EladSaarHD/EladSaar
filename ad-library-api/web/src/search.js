@@ -2,7 +2,15 @@ export const COUNTRY_OPTIONS = ['US', 'GB', 'CA', 'AU', 'DE', 'FR', 'ES', 'IT', 
 export const SCAN_WINDOWS = [3, 7, 14, 21, 30, 60, 90];
 
 export function normalizeQueries(value) {
-  return [...new Set(String(value || '').split(/[\n,]+/).map((q) => q.trim()).filter(Boolean))];
+  const values = Array.isArray(value) ? value : [value];
+  const terms = values.flatMap((input) => String(input || '').split(/[\n,|]+/)).map((term) => {
+    let clean = term.trim();
+    while (clean.length >= 2 && ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'")))) {
+      clean = clean.slice(1, -1).trim();
+    }
+    return clean;
+  }).filter(Boolean);
+  return [...new Set(terms)];
 }
 
 export function buildSearchParams(filters) {

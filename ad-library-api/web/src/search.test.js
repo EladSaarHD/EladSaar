@@ -4,8 +4,10 @@ import {
 } from './search.js';
 
 describe('search helpers', () => {
-  it('normalizes newline and comma separated queries without duplicates', () => {
-    expect(normalizeQueries('Nike, running shoes\nNike')).toEqual(['Nike', 'running shoes']);
+  it('normalizes pipes, wrapper quotes, newlines and commas without duplicates', () => {
+    expect(normalizeQueries('"% off" | "Worldwide Shipping"\nRelief,Worldwide Shipping')).toEqual([
+      '% off', 'Worldwide Shipping', 'Relief',
+    ]);
   });
 
   it('builds only supported API search parameters', () => {

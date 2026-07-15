@@ -114,7 +114,10 @@ the selected countries, follow Meta continuation cursors, deduplicate by
 exhausted. The target is a goal, not a promise that matching ads exist. Returned ads are
 revalidated locally against each shard's inclusive launch window before persistence;
 missing, invalid, or out-of-window `start_date` values are excluded and counted in the
-job's `discarded_ads` field.
+job's `discarded_ads` field. Query expressions accept pipes, commas, or new lines as
+OR separators; wrapping single or double quotes are removed, so
+`"% off" | "Worldwide Shipping"` and `% off | Worldwide Shipping` both produce the
+same clean `% off` and `Worldwide Shipping` scan terms.
 
 ```bash
 curl -X POST http://127.0.0.1:4100/api/scans \

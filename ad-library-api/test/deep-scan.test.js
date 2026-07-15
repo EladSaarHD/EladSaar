@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {
   buildScanShards, collectShardPages, expandQueries, extractStoreDomain, filterAdsToShardWindow,
-  isWithinShardWindow, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
+  isWithinShardWindow, normalizeQueryTerms, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
 } = require('../src/lib/deepScan');
 
 test('buildScanShards expands seeds across countries and bounded date windows', () => {
@@ -21,6 +21,19 @@ test('buildScanShards expands seeds across countries and bounded date windows', 
 test('buildScanShards caps excessive scans', () => {
   const shards = buildScanShards({ queries: Array.from({ length: 50 }, (_, i) => `q${i}`), countries: ['US'], lookbackDays: 365, windowDays: 7, maxShards: 25, today: '2026-07-12' });
   assert.strictEqual(shards.length, 25);
+});
+
+test('normalizeQueryTerms treats pipes as OR separators and removes wrapper quotes system-wide', () => {
+  const terms = normalizeQueryTerms([
+    '"% off" | "Worldwide Shipping"',
+    'Relief, Sale Ends\nWorldwide Shipping',
+  ]);
+  assert.deepStrictEqual(terms, ['% off', 'Worldwide Shipping', 'Relief', 'Sale Ends']);
+  const expanded = expandQueries(terms, { maxQueries: 100 });
+  assert.deepStrictEqual(expanded.slice(0, 4), ['% off', 'Worldwide Shipping', 'Relief', 'Sale Ends']);
+  assert.ok(expanded.includes('% off'));
+  assert.ok(expanded.includes('Worldwide Shipping'));
+  assert.ok(expanded.every((query) => !query.includes('|') && !query.includes('"')));
 });
 
 test('expandQueries creates diverse buyer-intent variants and dropshipping discovery phrases', () => {

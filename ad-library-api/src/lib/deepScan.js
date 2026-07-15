@@ -23,6 +23,18 @@ function filterAdsToShardWindow(ads, shard) {
   return { ads: valid, discarded: source.length - valid.length };
 }
 
+function normalizeQueryTerms(value) {
+  const inputs = Array.isArray(value) ? value : [value];
+  const terms = inputs.flatMap((input) => String(input || '').split(/[\n,|]+/)).map((term) => {
+    let clean = term.trim();
+    while (clean.length >= 2 && ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'")))) {
+      clean = clean.slice(1, -1).trim();
+    }
+    return clean;
+  }).filter(Boolean);
+  return [...new Set(terms)];
+}
+
 function buildScanShards({ queries, countries, lookbackDays = 180, windowDays = 30, maxShards = 300, today }) {
   const end = new Date(`${today || new Date().toISOString().slice(0, 10)}T00:00:00Z`);
   const windows = [];
@@ -37,7 +49,7 @@ function buildScanShards({ queries, countries, lookbackDays = 180, windowDays = 
     remaining -= days;
   }
   const result = [];
-  for (const query of [...new Set((queries || []).map((x) => String(x).trim()).filter(Boolean))]) {
+  for (const query of normalizeQueryTerms(queries)) {
     for (const country of [...new Set((countries || ['US']).map((x) => String(x).toUpperCase()))]) {
       for (const window of windows) {
         result.push({ query, country, ...window });
@@ -62,11 +74,10 @@ function expandQueries(queries, { mode = 'deep', maxQueries = 120 } = {}) {
     (q) => `${q} worldwide shipping`, (q) => `${q} limited offer`,
     (q) => `${q} buy 1 get 1`, (q) => `viral ${q}`, (q) => `${q} selling fast`,
   ];
+  const seeds = normalizeQueryTerms(queries);
   const result = mode === 'dropshipping' ? [...discovery] : [];
-  for (const query of queries || []) {
-    const clean = String(query).trim();
-    if (!clean) continue;
-    for (const make of modifiers) result.push(make(clean));
+  for (const make of modifiers) {
+    for (const clean of seeds) result.push(make(clean));
   }
   return [...new Set(result)].slice(0, Math.max(1, Math.min(Number(maxQueries) || 120, 300)));
 }
@@ -155,5 +166,5 @@ async function collectShardPages({
 
 module.exports = {
   buildScanShards, collectShardPages, expandQueries, extractStoreDomain, filterAdsToShardWindow,
-  isWithinShardWindow, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
+  isWithinShardWindow, normalizeQueryTerms, normalizeScanWindow, scoreDropshippingAd, scoreMomentum,
 };
