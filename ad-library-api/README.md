@@ -151,6 +151,12 @@ cool-down, and the state (cool-down, slower pace, 2 h no-speed-up hold, request 
 the database after a restart. The live health check pauses itself during that window instead of adding load or reporting a false
 outage; the header pill shows "Meta rate limit - resuming in ~N min" / "Meta limited us recently".
 
+**Export.** `GET /api/scans/:id/export?view=ads|stores&sort=...` returns a spreadsheet-ready CSV (UTF-8 BOM, CRLF, one row per ad
+or store; ad copy is neutralised against spreadsheet-formula injection). The scan screen has an **Export CSV** button.
+
+**Fail fast for interactive callers.** While Meta's cool-down is running, `/api/search` (UI search, Hunter's quick `search`) answers
+immediately with `429` + `Retry-After` and a plain message; only background scans wait the cool-down out.
+
 **Storage.** Each distinct ad is stored once, compressed, in `ad_payloads`; scan rows are small. See
 `scripts/migrate-payloads.js` (one-time migration of old databases) and `docs/audit-2026-11-04.md`.
 
