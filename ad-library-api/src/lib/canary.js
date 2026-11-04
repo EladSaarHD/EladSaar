@@ -4,6 +4,7 @@ const client = require('./graphqlClient');
 const { buildSearchVariables } = require('./variables');
 const { normalizeSearchResponse } = require('./normalize');
 const rateEvents = require('./rateEvents');
+const alerts = require('./alerts');
 
 // A canary that only fetches page 1 cannot see a broken continuation: every scan was silently
 // capped at its first page from mid-July because the old watchdog never asked for page 2. This
@@ -47,6 +48,12 @@ async function runCanary({ query = 'running shoes', country = 'US' } = {}) {
     result.meta_error_code = error.metaErrorCode || null;
   }
   result.ms = Date.now() - startedAt;
+  // Tell the owner about a real break (and its recovery) once, not on every check.
+  if (result.ok === false && !(last && last.ok === false)) {
+    alerts.raise('canary_failed', { title: 'AdSignal live check failed', detail: result.error || 'unknown', dedupeMs: 6 * 3600000 });
+  } else if (result.ok === true && last && last.ok === false) {
+    alerts.raise('canary_recovered', { title: 'AdSignal live check passes again', severity: 'info' });
+  }
   last = result;
   return result;
 }

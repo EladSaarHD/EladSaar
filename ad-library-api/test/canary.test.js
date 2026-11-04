@@ -96,3 +96,25 @@ test('the canary is paused (not "failed") while Meta is rate-limiting, and makes
     require('../src/db').prepare("DELETE FROM rate_limit_events WHERE reason = 'test rate limit'").run();
   }
 });
+
+test('canary transitions raise one alert on a real break and one when it recovers', async () => {
+  const alerts = require('../src/lib/alerts');
+  const db = require('../src/db');
+  db.prepare("DELETE FROM rate_limit_events").run();
+  db.prepare("DELETE FROM alerts WHERE kind LIKE 'canary_%'").run();
+  const good = (variables) => (variables.cursor
+    ? searchData({ ads: 10, next: false })
+    : searchData({ ads: 30, next: true }));
+  responder = good;
+  await runCanary();
+  assert.strictEqual(alerts.list({ limit: 50 }).filter((a) => a.kind.startsWith('canary_')).length, 0, 'healthy: silent');
+  responder = (variables) => { if (variables.cursor) throw new Error('continuation rejected'); return searchData({ ads: 30, next: true }); };
+  await runCanary();
+  await runCanary();
+  let canaryAlerts = alerts.list({ limit: 50 }).filter((a) => a.kind.startsWith('canary_'));
+  assert.deepStrictEqual(canaryAlerts.map((a) => a.kind), ['canary_failed'], 'broken: alerted once, not per check');
+  responder = good;
+  await runCanary();
+  canaryAlerts = alerts.list({ limit: 50 }).filter((a) => a.kind.startsWith('canary_'));
+  assert.deepStrictEqual(canaryAlerts.map((a) => a.kind).sort(), ['canary_failed', 'canary_recovered']);
+});

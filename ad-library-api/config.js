@@ -55,6 +55,9 @@ const config = {
   // Soft rolling budget of upstream requests per hour (0 = unlimited). A 16-minute sustained burst of ~490 requests
   // (0.65/s) was rate-limited by Meta on 2026-11-04; 900/h keeps heavy scans from stacking into that pattern.
   maxRequestsPerHour: num(fileConfig.maxRequestsPerHour, env.MAX_REQUESTS_PER_HOUR, 900),
+  // Optional instant delivery of alerts (POST {text,...}); Hunter's watchdog also picks them up from GET /api/alerts.
+  alertWebhookUrl: String(fileConfig.alertWebhookUrl || env.ALERT_WEBHOOK_URL || ''),
+  watchScheduler: num(fileConfig.watchScheduler, env.WATCH_SCHEDULER, 1) !== 0,
   maxRetries: num(fileConfig.maxRetries, env.MAX_RETRIES, 3),
   backoffBaseMs: num(fileConfig.backoffBaseMs, env.BACKOFF_BASE_MS, 5000),
   sessionTtlSeconds: num(fileConfig.sessionTtlSeconds, env.SESSION_TTL_SECONDS, 1800),

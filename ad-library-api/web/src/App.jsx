@@ -290,7 +290,7 @@ function App() {
           <button className={workspaceMode === 'tracker' ? 'active' : ''} onClick={() => { setWorkspaceMode('tracker'); setScanJob(null); setSearched(false); setError(''); }}><span><Activity size={14} /> Tracker</span><small>New, scaling &amp; longest-running</small></button>
         </nav>
 
-        {workspaceMode === 'tracker' && <Tracker onOpen={openDetails} />}
+        {workspaceMode === 'tracker' && <><DataFreshness health={health} /><Watchlists /><Tracker onOpen={openDetails} /></>}
 
         {workspaceMode !== 'tracker' && <form className="search-panel" onSubmit={workspaceMode === 'search' ? runSearch : startScan}>
           <div className="query-row">
@@ -481,3 +481,66 @@ function Tracker({ onOpen }) {
 }
 
 export default App;
+
+
+// "Data as of ..." so the tracker never pretends to be live while Meta is limiting us.
+export function DataFreshness({ health }) {
+  const data = health?.data;
+  if (!data) return null;
+  const ago = (time) => {
+    if (!time) return 'never';
+    const minutes = Math.round((Date.now() - time) / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 90) return `${minutes} min ago`;
+    if (minutes < 2880) return `${Math.round(minutes / 60)} h ago`;
+    return `${Math.round(minutes / 1440)} days ago`;
+  };
+  const limited = health?.pacing?.hold_ms > 0 || health?.pacing?.cooling_down_ms > 0;
+  return <div className="freshness"><Activity size={14} /><span>Data as of <b>{ago(data.last_scan_completed_at)}</b> (last finished scan) · newest ad first seen {ago(data.last_new_ad_at)}{limited ? ' · Meta is limiting AdSignal right now, so nothing newer is coming in yet.' : ''}</span></div>;
+}
+
+// Scheduled incremental scans: terms AdSignal re-checks by itself, politely (idle only, never during a Meta limit).
+export function Watchlists() {
+  const [items, setItems] = useState([]);
+  const [form, setForm] = useState({ name: '', queries: '', everyMinutes: 60, lookbackDays: 14, targetAds: 600 });
+  const [message, setMessage] = useState('');
+  const load = () => fetch('/api/watchlists').then((r) => r.json()).then((data) => setItems(data.watchlists || [])).catch(() => {});
+  useEffect(() => { load(); const timer = setInterval(load, 30000); return () => clearInterval(timer); }, []);
+  const call = async (path, method, body) => {
+    const response = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error?.message || 'Request failed');
+    return data;
+  };
+  async function add(event) {
+    event.preventDefault();
+    try {
+      await call('/api/watchlists', 'POST', { ...form, everyMinutes: Number(form.everyMinutes), lookbackDays: Number(form.lookbackDays), targetAds: Number(form.targetAds) });
+      setMessage('Added. It first runs about a minute from now, when AdSignal is idle and Meta is not limiting it.');
+      setForm({ ...form, name: '', queries: '' });
+      load();
+    } catch (error) { setMessage(error.message); }
+  }
+  const act = async (path, method, body) => { try { await call(path, method, body); setMessage(''); load(); } catch (error) { setMessage(error.message); } };
+  const when = (time) => (time ? new Date(time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
+  return <section className="watchlists">
+    <div className="watch-head"><strong>Watchlists</strong><small>AdSignal re-checks these on its own with incremental scans (only new ads, few requests)</small></div>
+    {items.map((w) => <div className="watch-row" key={w.id}>
+      <div><b>{w.name}</b><span>{w.queries.join(' · ')} · every {w.everyMinutes} min · {w.lookbackDays}d window</span></div>
+      <div><span>{w.enabled ? `next ${when(w.next_run_at)}` : 'paused'}</span><span>{w.last_status ? `last: ${w.last_status}` : 'not run yet'}{w.last_run_at ? ` · ${when(w.last_run_at)}` : ''}</span></div>
+      <div className="watch-actions">
+        <button type="button" onClick={() => act(`/api/watchlists/${w.id}/run`, 'POST')}>Run now</button>
+        <button type="button" onClick={() => act(`/api/watchlists/${w.id}`, 'PATCH', { enabled: !w.enabled })}>{w.enabled ? 'Pause' : 'Resume'}</button>
+        <button type="button" onClick={() => window.confirm(`Delete "${w.name}"?`) && act(`/api/watchlists/${w.id}`, 'DELETE')}>Delete</button>
+      </div>
+    </div>)}
+    <form className="watch-form" onSubmit={add}>
+      <input placeholder="Name (optional)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      <input placeholder='Terms, e.g. "posture corrector" | neck fan' value={form.queries} onChange={(e) => setForm({ ...form, queries: e.target.value })} required />
+      <select value={form.everyMinutes} onChange={(e) => setForm({ ...form, everyMinutes: e.target.value })}>{[[60, 'every hour'], [180, 'every 3 hours'], [720, 'every 12 hours'], [1440, 'daily']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+      <select value={form.lookbackDays} onChange={(e) => setForm({ ...form, lookbackDays: e.target.value })}>{[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} day window</option>)}</select>
+      <button type="submit" className="secondary-button">Add watchlist</button>
+    </form>
+    {message && <p className="watch-message">{message}</p>}
+  </section>;
+}

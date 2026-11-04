@@ -12,9 +12,13 @@ const searchRouter = require('./routes/search');
 const pagesRouter = require('./routes/pages');
 const adsRouter = require('./routes/ads');
 const scansRouter = require('./routes/scans');
+const watchlistsRouter = require('./routes/watchlists');
+const alertsRouter = require('./routes/alerts');
+const adminRouter = require('./routes/admin');
 const registryRouter = require('./routes/registry');
 const { startCanarySchedule } = require('./lib/canary');
 const { pump: resumeQueuedScans } = require('./lib/deepScanService');
+const { startScheduler } = require('./lib/watchlists');
 
 // A scraping error must never take down the server — log and keep serving.
 process.on('uncaughtException', (err) => {
@@ -40,6 +44,9 @@ app.use('/api/pages', pagesRouter);
 app.use('/api/ads', adsRouter);
 app.use('/api/scans', scansRouter);
 app.use('/api/registry', registryRouter);
+app.use('/api/watchlists', watchlistsRouter);
+app.use('/api/alerts', alertsRouter);
+app.use('/api/admin', adminRouter);
 
 // 404 for unknown /api routes.
 app.use('/api', (req, res) => {
@@ -61,6 +68,7 @@ const server = app.listen(config.port, config.bindHost, () => {
   console.log(`  Auth:      ${config.apiKey ? 'X-API-Key required' : 'open (no API key set)'}`);
   console.log(`  Country:   ${config.defaultCountry}  ·  cache TTL ${config.cacheTtlSeconds}s\n`);
   startCanarySchedule({ intervalHours: config.canaryIntervalHours });
+  startScheduler(); // scheduled incremental scans (only runs when idle, not rate-limited, within budget)
 });
 
 module.exports = server;

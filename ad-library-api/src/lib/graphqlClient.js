@@ -5,6 +5,7 @@ const config = require('../../config');
 const session = require('./session');
 const { httpFetch, readText } = require('./http');
 const rateEvents = require('./rateEvents');
+const alerts = require('./alerts');
 const { AdaptiveRateLimiter } = require('./rateLimiter');
 const { RateLimitedError, TokenExpiredError, UpstreamBlockedError } = require('./errors');
 const {
@@ -351,6 +352,10 @@ async function postGraphql({ friendlyName, docId, variables, sess }) {
   return res;
 }
 
+// Optional tap on raw responses (used by /api/admin/capture-fixtures to record real Meta responses for contract tests).
+let captureSink = null;
+function setCaptureSink(fn) { captureSink = fn; }
+
 // One rate-limited attempt: fetch, classify HTTP status, parse. Throws typed
 // errors the retry loop understands.
 async function attempt({ kind, variables, force }) {
@@ -388,7 +393,9 @@ async function attempt({ kind, variables, force }) {
     throw err;
   }
 
-  const json = parseResponse(await readText(res));
+  const bodyText = await readText(res);
+  if (captureSink) captureSink({ kind, status: res.status, text: bodyText });
+  const json = parseResponse(bodyText);
 
   if (isStaleSession(json)) {
     const err = new TokenExpiredError('Upstream reported a stale session (1357004)');
@@ -476,6 +483,7 @@ async function request(args) {
   try {
     const data = await requestRaw(args);
     limiter.reward();
+    alerts.noteSuccess();
     return data;
   } catch (err) {
     if (isPressureSignal(err) && err.retryable !== 'backoff' && err.retryable !== 'ratelimit') limiter.penalize(err.message); // 'backoff' ones were counted in the retry loop
@@ -503,6 +511,7 @@ async function requestWithRetries({ kind, variables, patient = false }) {
       if (err.retryable === 'ratelimit') {
         const event = limiter.rateLimited(err.message);
         rateEvents.record(event);
+        alerts.noteRateLimit(event);
         console.warn(`[graphql] Meta rate limit (${event.requests_10m} requests in the last 10 min, ${event.requests_60m} in 60): cooling down ${Math.round(event.cooldown_ms / 60000)} min`);
         rateLimitHits += 1;
         // Only background scans wait out the cool-down; everyone else gets the error straight away.
@@ -536,6 +545,7 @@ function pseudoRandom(i) {
 
 module.exports = {
   getPacing: () => limiter.stats(),
+  setCaptureSink,
   limiter,
   rateLimitFrom,
   isRateLimitText,
