@@ -98,6 +98,7 @@ db.exec(`
     seen_scans INTEGER NOT NULL DEFAULT 1,
     max_variants INTEGER,
     scale_score INTEGER NOT NULL DEFAULT 0,
+    seed_hit INTEGER NOT NULL DEFAULT 0,
     first_scan_id TEXT,
     last_scan_id TEXT
   );
@@ -108,5 +109,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_registry_domain ON ad_registry(domain);
   CREATE INDEX IF NOT EXISTS idx_registry_scale ON ad_registry(scale_score DESC);
 `);
+
+// seed_hit = 1 when a term the USER typed (not a generated promo/modifier phrase) found the ad.
+// Old promo-phrase scans pulled in app installs and marketplaces; this separates them.
+const registryColumns = new Set(db.pragma('table_info(ad_registry)').map((column) => column.name));
+if (!registryColumns.has('seed_hit')) {
+  db.exec('ALTER TABLE ad_registry ADD COLUMN seed_hit INTEGER NOT NULL DEFAULT 0');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_registry_seed ON ad_registry(seed_hit, first_seen DESC)');
 
 module.exports = db;

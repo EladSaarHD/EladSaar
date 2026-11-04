@@ -75,7 +75,7 @@ function mergeUnique(existing, value) {
   return values;
 }
 
-function saveAd(scanId, ad, query, country, { rank = null } = {}) {
+function saveAd(scanId, ad, query, country, { rank = null, seed = true } = {}) {
   if (!ad.ad_archive_id) return;
   const existing = getAdStmt.get(scanId, ad.ad_archive_id);
   const dropship = scoreDropshippingAd(ad);
@@ -95,7 +95,7 @@ function saveAd(scanId, ad, query, country, { rank = null } = {}) {
     payload_json: JSON.stringify(payload), first_seen: existing?.first_seen || now, last_seen: now,
     meta_rank: rank, variant_count: scale.variants, scale_score: scale.score,
   });
-  registry.recordSighting(scanId, ad, { domain: extractStoreDomain(ad), scale, now });
+  registry.recordSighting(scanId, ad, { domain: extractStoreDomain(ad), scale, now, seedHit: seed });
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -130,7 +130,12 @@ async function runScan(id, shards, config) {
       const initialParams = { q: shard.query, country: shard.country, start_date: shard.startDate, end_date: shard.endDate,
         active_status: config.activeStatus || 'all', media_type: config.mediaType || 'all',
         platform: config.platform || null, first: 50, sort: sortMode };
-      if (shard.searchType) initialParams.search_type = shard.searchType;
+      if (shard.searchType && !shard.pageId) initialParams.search_type = shard.searchType;
+      // Advertiser sweep: every active ad from one page. No keyword, and no launch window — the point
+      // is the advertiser's whole footprint, not what they started recently.
+      if (shard.pageId) initialParams.page_id = shard.pageId;
+      const label = shard.query || `page:${shard.pageId}`;
+      const isSeed = !shard.origin || shard.origin === 'seed';
       const fetchPage = async (params) => {
         let error = null;
         // The GraphQL layer already retries rate limits and transient network faults. This outer
@@ -153,7 +158,7 @@ async function runScan(id, shards, config) {
       let position = 0;
       let lastHeartbeat = 0;
       let stopCheck = null;
-      if (sortMode === 'recent') {
+      if (sortMode === 'recent' && !shard.pageId) {
         const windowStop = createWindowEarlyStop({ windowStart: shard.startDate });
         stopCheck = (ads, info) => { const stop = windowStop(ads, info); if (stop) earlyStops += 1; return stop; };
       }
@@ -174,10 +179,10 @@ async function runScan(id, shards, config) {
           maxPages: config.maxPagesPerShard || pageBudget(config.targetAds - countUnique(), { cap: 400 }),
           fetchPage,
           saveAds: (ads) => {
-            const filtered = filterAdsToShardWindow(ads, shard);
+            const filtered = shard.pageId ? { ads, discarded: 0 } : filterAdsToShardWindow(ads, shard);
             discarded += filtered.discarded;
             const rankOf = new Map(ads.map((ad, index) => [ad, position + index]));
-            filtered.ads.forEach((ad) => saveAd(id, ad, shard.query, shard.country, { rank: rankOf.get(ad) }));
+            filtered.ads.forEach((ad) => saveAd(id, ad, label, shard.country, { rank: rankOf.get(ad), seed: isSeed }));
             position += ads.length;
             if (Date.now() - lastHeartbeat >= (config.heartbeatMs ?? 4000)) {
               lastHeartbeat = Date.now();
@@ -240,14 +245,18 @@ function createScan(input) {
   // pagination that stopped after one page. They are strict subsets of the seed's result pool, so
   // with working pagination they only re-fetch the same ads. They remain available, opt-in.
   const plan = buildQueryPlan(terms, { mode, maxQueries: 300, expansion });
+  // Advertiser sweep: explicit Facebook page IDs, collected without a keyword or launch window.
+  const rawPageIds = Array.isArray(input.pageIds) ? input.pageIds : String(input.pageIds || '').split(/[\s,|]+/);
+  const pageIds = [...new Set(rawPageIds.map((id) => String(id).trim()).filter((id) => /^\d{5,20}$/.test(id)))].slice(0, 25);
+  for (const pageId of pageIds) plan.push({ query: '', pageId, searchType: 'page', origin: 'seed' });
   const countries = [...new Set((input.countries || ['US']).map((x) => String(x).toUpperCase()))].slice(0, 20);
   if (!plan.length) throw new Error('At least one query is required');
   const targetAds = Math.max(30, Math.min(Number(input.targetAds) || 1000, 10000));
   const maxShards = Math.min(500, Math.max(1, Math.ceil(targetAds / 12)));
   const lookbackDays = normalizeScanWindow(input.lookbackDays);
-  const config = { mode, queries, queryExpression: terms.map((t) => (t.exact ? `"${t.text}"` : t.text)).join(' | '),
-    exactTerms: terms.filter((t) => t.exact).map((t) => t.text), expansion, sort,
-    expandedQueries: plan.map((entry) => entry.query), countries, targetAds, lookbackDays,
+  const config = { mode, queries, queryExpression: [...terms.map((t) => (t.exact ? `"${t.text}"` : t.text)), ...pageIds.map((id) => `page:${id}`)].join(' | '),
+    exactTerms: terms.filter((t) => t.exact).map((t) => t.text), expansion, sort, pageIds,
+    expandedQueries: plan.filter((entry) => entry.query).map((entry) => entry.query), countries, targetAds, lookbackDays,
     windowDays: lookbackDays, activeStatus: input.activeStatus || 'active',
     mediaType: input.mediaType || 'all', platform: input.platform || null };
   const shards = buildScanShards({ queries: plan, countries, lookbackDays,
@@ -260,7 +269,8 @@ function createScan(input) {
 
 function seedSet(id) {
   const job = getJob(id);
-  return { seeds: new Set(job?.config?.queries || []), sort: job?.config?.sort || 'impressions' };
+  const pageLabels = (job?.config?.pageIds || []).map((pageId) => `page:${pageId}`);
+  return { seeds: new Set([...(job?.config?.queries || []), ...pageLabels]), sort: job?.config?.sort || 'impressions' };
 }
 
 function listAds(id, options = {}) {

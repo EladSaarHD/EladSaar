@@ -396,14 +396,35 @@ async function attempt({ kind, variables, force }) {
 // Public entry point. Runs `attempt` with a retry policy:
 //   - stale session / 403  → invalidate + re-bootstrap, retry once
 //   - 429 / transient      → exponential backoff with jitter, up to maxRetries
-async function request({ kind, variables }) {
-  if (kind === 'search' && !variables.cursor) {
-    return requestInitialSearch(variables);
-  }
-  if (kind === 'details') {
-    return requestInitialDetails(variables);
-  }
+// The server-rendered first page occasionally comes back unparseable (a login/challenge variant)
+// or fails outright. The same first page can be fetched through the GraphQL POST — smaller (10 ads, no
+// total count) but it needs no HTML — so fall back to it rather than failing the whole shard.
+function shouldFallbackToPost(err) {
+  return err instanceof UpstreamBlockedError && !err.metaErrorCode
+    && /Initial search GET failed|Could not extract initial search data|Network request to Facebook failed/.test(err.message || '');
+}
 
+async function searchFirstPageViaPost(variables) {
+  return requestWithRetries({ kind: 'search', variables: { ...variables, cursor: null, continuationStateID: null } });
+}
+
+async function requestSearchFirstPage(variables) {
+  try {
+    return await requestInitialSearch(variables);
+  } catch (err) {
+    if (!shouldFallbackToPost(err)) throw err;
+    console.warn(`[graphql] first-page HTML failed (${err.message}); falling back to GraphQL POST`);
+    return searchFirstPageViaPost(variables);
+  }
+}
+
+async function request({ kind, variables }) {
+  if (kind === 'search' && !variables.cursor) return requestSearchFirstPage(variables);
+  if (kind === 'details') return requestInitialDetails(variables);
+  return requestWithRetries({ kind, variables });
+}
+
+async function requestWithRetries({ kind, variables }) {
   let refreshed = false;
   let lastErr;
 
@@ -451,6 +472,8 @@ module.exports = {
   buildPostHeaders,
   epochDayToIso,
   pruneContinuationSessions,
+  shouldFallbackToPost,
+  searchFirstPageViaPost,
   extractScriptUrls,
   refreshRuntimeMetadata,
   findSearchMain,

@@ -271,6 +271,75 @@ test('createScan: a dropshipping store-finder with no terms still runs the disco
   }
 });
 
+
+test('registry separates ads found by the user\'s own terms from expansion-only hits; storefront filter drops app stores', async () => {
+  script = (params, variables) => {
+    const ads = variables.queryString === 'seed term'
+      ? [makeAd('S1'), makeAd('S2')]
+      : [makeAd('M1'), makeAd('M2', { creative: { link_url: 'https://play.google.com/store/apps/details?id=x' } })];
+    return { ads, page_info: { has_next_page: false, end_cursor: null }, count: ads.length };
+  };
+  const config = { targetAds: 500, queries: ['seed term'], lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shards = [{ ...SHARD, query: 'seed term' }, { ...SHARD, query: 'buy seed term', origin: 'modifier' }];
+  const id = newJob(config, shards);
+  await service.runScan(id, shards, config);
+  const seedOnly = registry.listAds({ seedsOnly: '1', limit: 500 }).ads.map((ad) => ad.ad_archive_id);
+  assert.ok(seedOnly.includes('S1') && seedOnly.includes('S2'));
+  assert.ok(!seedOnly.includes('M1') && !seedOnly.includes('M2'), 'modifier-only hits are not seed hits');
+  const stores = registry.listDomains({ storesOnly: '1', limit: 500 }).domains.map((d) => d.domain);
+  assert.ok(!stores.includes('play.google.com'));
+  assert.ok(registry.listDomains({ limit: 500 }).domains.some((d) => d.domain === 'play.google.com'));
+  // backfilled rows have no scale in their old payload: the registry column wins
+  const top = registry.listAds({ sort: 'scale', limit: 1 }).ads[0];
+  assert.strictEqual(typeof top.scale_score, 'number');
+});
+
+test('an advertiser sweep collects every ad from the page, ignoring the launch window', async () => {
+  calls.length = 0;
+  script = pagedScript(25, { makeOne: (i) => makeAd(`P${i}`, { start_date: i % 2 ? '2025-01-05' : '2026-10-20' }) });
+  const config = { targetAds: 100, queries: [], pageIds: ['123456789'], lookbackDays: 30, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shard = { query: '', pageId: '123456789', searchType: 'page', startDate: '2026-10-06', endDate: '2026-11-04' };
+  const id = newJob(config, [shard]);
+  await service.runScan(id, [shard], config);
+  assert.strictEqual(calls[0].variables.searchType, 'page');
+  assert.strictEqual(calls[0].variables.viewAllPageID, '123456789');
+  const job = service.getJob(id);
+  assert.strictEqual(job.unique_ads, 25, 'old (2025) ads are kept: a sweep is not window-limited');
+  assert.strictEqual(job.discarded_ads, 0);
+  const ads = service.listAds(id, { limit: 5 }).ads;
+  assert.ok(ads.every((ad) => ad.matched_seed === true && ad.matched_queries[0] === 'page:123456789'));
+});
+
+test('createScan accepts pageIds (sweep) and rejects junk ids', async () => {
+  script = () => ({ ads: [], page_info: { has_next_page: false, end_cursor: null }, count: 0 });
+  const job = service.createScan({ pageIds: ['111111111', 'not-an-id', '222222222'], lookbackDays: 30, targetAds: 30 });
+  assert.deepStrictEqual(job.config.pageIds, ['111111111', '222222222']);
+  assert.strictEqual(job.total_shards, 2);
+  assert.strictEqual(job.config.queryExpression, 'page:111111111 | page:222222222');
+  for (let i = 0; i < 100 && ['queued', 'running'].includes(service.getJob(job.id).status); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.throws(() => service.createScan({ pageIds: ['abc'], queries: [], lookbackDays: 30 }), /At least one query/);
+});
+
+test('digest lists new launches from the user\'s own terms, new stores and advertisers, with a text form', async () => {
+  const day = new Date().toISOString().slice(0, 10);
+  script = pagedScript(6, { makeOne: (i) => makeAd(`D${i}`, { start_date: day, collation_count: 4 + i, creative: { link_url: `https://digest${i % 2}.example/products/p` } }) });
+  const config = { targetAds: 30, queries: ['digest term'], lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shard = { ...SHARD, query: 'digest term', endDate: day };
+  const id = newJob(config, [shard]);
+  await service.runScan(id, [shard], config);
+  const result = registry.digest({ hours: 24, limit: 5 });
+  assert.ok(result.counts.ads >= 6 && result.counts.stores >= 2);
+  assert.ok(result.top_ads.length >= 1 && result.top_ads.length <= 5);
+  assert.ok(result.top_ads[0].scale_score >= result.top_ads[result.top_ads.length - 1].scale_score);
+  assert.ok(result.new_stores.some((s) => /^digest\d\.example$/.test(s.domain)));
+  const text = registry.digestText(result);
+  assert.match(text, /AdSignal — last 24h/);
+  assert.match(text, /Top by scale:/);
+  assert.match(text, /facebook\.com\/ads\/library\/\?id=/);
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });

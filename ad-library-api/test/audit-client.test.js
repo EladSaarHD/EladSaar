@@ -191,3 +191,16 @@ test('continuation sessions are evicted instead of growing forever', () => {
   // exercised through the exported pruner: an empty map is a no-op and never throws
   assert.doesNotThrow(() => client.pruneContinuationSessions(Date.now() + 10 * 3600 * 1000));
 });
+
+test('first-page POST fallback triggers only for HTML/network failures, never for coded rejections', () => {
+  const { UpstreamBlockedError, TokenExpiredError } = require('../src/lib/errors');
+  assert.strictEqual(client.shouldFallbackToPost(new UpstreamBlockedError('Could not extract initial search data from Ad Library HTML')), true);
+  assert.strictEqual(client.shouldFallbackToPost(new UpstreamBlockedError('Initial search GET failed with HTTP 403')), true);
+  assert.strictEqual(client.shouldFallbackToPost(new UpstreamBlockedError('Network request to Facebook failed (ETIMEDOUT)')), true);
+  const coded = new UpstreamBlockedError('Upstream rejected the request (Meta error 1357054)');
+  coded.metaErrorCode = 1357054;
+  assert.strictEqual(client.shouldFallbackToPost(coded), false, 'a coded rejection would fail the POST too');
+  assert.strictEqual(client.shouldFallbackToPost(new TokenExpiredError()), false);
+  assert.strictEqual(client.shouldFallbackToPost(new Error('boom')), false);
+});
+

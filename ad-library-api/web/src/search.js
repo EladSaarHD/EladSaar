@@ -5,11 +5,11 @@ export const SCAN_ORDERS = [
   { value: 'recent', label: 'Newest launches first' },
 ];
 export const TRACKER_VIEWS = [
-  { id: 'new', label: 'New this week', path: '/api/registry/ads?sort=new&since_days=7&limit=60', kind: 'ads' },
-  { id: 'scaling', label: 'Scaling now', path: '/api/registry/ads?sort=scale&active=1&limit=60', kind: 'ads' },
-  { id: 'longest', label: 'Longest running', path: '/api/registry/ads?sort=longest&active=1&limit=60', kind: 'ads' },
-  { id: 'advertisers', label: 'Advertisers', path: '/api/registry/advertisers?sort=scale&limit=40', kind: 'advertisers' },
-  { id: 'stores', label: 'Stores', path: '/api/registry/domains?sort=scale&limit=40', kind: 'domains' },
+  { id: 'new', label: 'New this week', path: '/api/registry/ads?sort=new&since_days=7&seeds_only=1&limit=60', kind: 'ads' },
+  { id: 'scaling', label: 'Scaling now', path: '/api/registry/ads?sort=scale&active=1&seeds_only=1&limit=60', kind: 'ads' },
+  { id: 'longest', label: 'Longest running', path: '/api/registry/ads?sort=longest&active=1&seeds_only=1&limit=60', kind: 'ads' },
+  { id: 'advertisers', label: 'Advertisers', path: '/api/registry/advertisers?sort=scale&seeds_only=1&limit=40', kind: 'advertisers' },
+  { id: 'stores', label: 'Stores', path: '/api/registry/domains?sort=scale&seeds_only=1&stores_only=1&limit=40', kind: 'domains' },
 ];
 
 // Quote-aware split on OR separators (| , newline) — mirrors the server so a phrase such as

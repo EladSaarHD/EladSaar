@@ -88,10 +88,10 @@ function buildScanShards({ queries, countries, lookbackDays = 180, windowDays = 
   const result = [];
   // Accept plain strings (legacy) or plan entries `{ query, searchType, origin }`.
   const entries = (Array.isArray(queries) ? queries : [queries]).flatMap((entry) => (
-    entry && typeof entry === 'object' && entry.query
-      ? [{ query: String(entry.query).trim(), searchType: entry.searchType, origin: entry.origin }]
+    entry && typeof entry === 'object' && (entry.query || entry.pageId)
+      ? [{ query: String(entry.query || '').trim(), searchType: entry.searchType, origin: entry.origin, pageId: entry.pageId }]
       : normalizeQueryTerms(entry).map((query) => ({ query }))
-  )).filter((entry) => entry.query);
+  )).filter((entry) => entry.query || entry.pageId);
   for (const entry of entries) {
     for (const country of [...new Set((countries || ['US']).map((x) => String(x).toUpperCase()))]) {
       for (const window of windows) {
@@ -99,6 +99,7 @@ function buildScanShards({ queries, countries, lookbackDays = 180, windowDays = 
         // Only carry non-default fields so legacy shard shapes are unchanged.
         if (entry.searchType && entry.searchType !== 'keyword_unordered') shard.searchType = entry.searchType;
         if (entry.origin && entry.origin !== 'seed') shard.origin = entry.origin;
+        if (entry.pageId) shard.pageId = String(entry.pageId);
         result.push(shard);
         if (result.length >= Math.max(1, Math.min(Number(maxShards) || 300, 1000))) return result;
       }
