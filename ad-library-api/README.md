@@ -140,6 +140,17 @@ follows the scan's real yield (a windowed scan in impression order discards ads 
 needs more pages than the target suggests), capped at 1,100 pages per shard. In `Newest first` order a windowed scan stops
 as soon as it pages past the window.
 
+**Incremental scans (cheapest daily re-scan).** `"incremental": true` (UI: *Newest launches first* -> *Only ads new to the
+tracker*; Hunter: `--incremental`) forces newest-first order and stops once three consecutive pages are >=90% ads the tracker
+already held before the scan was created. A re-scan of the same terms then costs a handful of requests instead of the whole
+chain, and the note reports how many ads were new. It is part of the request identity, so it never re-attaches to a
+non-incremental scan.
+
+**Rate limits are remembered.** Meta's `Rate limit exceeded` stops the scan (partial results kept), queued scans wait out the
+cool-down, and the state (cool-down, slower pace, 2 h no-speed-up hold, request history for the hourly budget) is rebuilt from
+the database after a restart. The live health check pauses itself during that window instead of adding load or reporting a false
+outage; the header pill shows "Meta rate limit - resuming in ~N min" / "Meta limited us recently".
+
 **Storage.** Each distinct ad is stored once, compressed, in `ad_payloads`; scan rows are small. See
 `scripts/migrate-payloads.js` (one-time migration of old databases) and `docs/audit-2026-11-04.md`.
 
