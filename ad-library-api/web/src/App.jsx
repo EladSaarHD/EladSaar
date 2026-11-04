@@ -305,7 +305,7 @@ function App() {
             <label><span>Launch window</span><select value={filters.lookbackDays} onChange={(e) => update('lookbackDays', e.target.value)}>{SCAN_WINDOWS.map((days) => <option key={days} value={days}>{days} days</option>)}</select></label>
             <label><span>Collect in order</span><select value={filters.scanSort} onChange={(e) => update('scanSort', e.target.value)}>{SCAN_ORDERS.map((order) => <option key={order.value} value={order.value}>{order.label}</option>)}</select></label>
             {filters.scanSort === 'recent' && <label className="inline-check"><span>Only ads new to the tracker</span><input type="checkbox" checked={Boolean(filters.incremental)} onChange={(e) => update('incremental', e.target.checked)} /></label>}
-            <div className="scan-note"><Activity size={15} /><span>One scan at a time; results stream in and stay local. Put a phrase in "quotes" for an exact match. “Newest launches” finds new ads fastest for short windows.</span></div>
+            <div className="scan-note"><Activity size={15} /><span>Scans run one at a time (more queue up behind it); results stream in and stay local. Put a phrase in "quotes" for an exact match. “Newest launches” finds new ads fastest for short windows.</span></div>
           </div>}
           <div className={`filters ${workspaceMode !== 'search' ? 'scan-filters' : ''} ${filtersOpen ? 'open' : ''}`}>
             {workspaceMode === 'search' && <label><span>Country</span><div className="select-wrap"><select value={filters.country} onChange={(e) => update('country', e.target.value)}>{COUNTRY_OPTIONS.map((c) => <option key={c}>{c}</option>)}</select><ChevronDown size={14} /></div></label>}
