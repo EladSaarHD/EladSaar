@@ -59,6 +59,7 @@ class RateLimiter {
 // back, and it never goes below the configured floor.
 class AdaptiveRateLimiter extends RateLimiter {
   _onStart(at) {
+    if (this.onRequestStart) this.onRequestStart(at);
     this.starts.push(at);
     if (this.starts.length > 4000 || (this.starts[0] && at - this.starts[0] > 2 * 3600000)) {
       this.starts = this.starts.filter((t) => at - t < 2 * 3600000);
@@ -66,10 +67,11 @@ class AdaptiveRateLimiter extends RateLimiter {
   }
 
   constructor({ startMs = 2000, floorMs = startMs, ceilingMs = 12000, speedUpAfter = 25, speedUpFactor = 0.85,
-    slowFactor = 2, cooldownMs = 30000, maxCooldownMs = 300000, penaltyWindowMs = 300000, maxPerHour = 0, concurrency = 1 } = {}) {
+    slowFactor = 2, cooldownMs = 30000, maxCooldownMs = 300000, penaltyWindowMs = 300000, maxPerHour = 0, onRequestStart = null, concurrency = 1 } = {}) {
     super({ minDelayMs: startMs, concurrency });
     this.startMs = startMs;
     this.maxPerHour = maxPerHour; // soft rolling budget; 0 = unlimited
+    this.onRequestStart = onRequestStart;
     this.floorMs = Math.min(floorMs, startMs);
     this.ceilingMs = Math.max(ceilingMs, startMs);
     this.speedUpAfter = speedUpAfter;
@@ -136,6 +138,19 @@ class AdaptiveRateLimiter extends RateLimiter {
     this.lastPenalty = { reason: String(reason).slice(0, 120), at: now, cooldown_ms: cooldown, rate_limit: true };
     return { at: now, reason: String(reason).slice(0, 200), requests_10m: this.requestsSince(600000, now),
       requests_60m: this.requestsSince(3600000, now), delay_ms: this.minDelayMs, cooldown_ms: cooldown };
+  }
+
+  // Rebuild state after a restart: the request history (so the hourly budget is honest) and, if Meta rate-limited
+  // us recently, the cool-down / pace / no-speed-up hold that were in force.
+  restore({ starts = [], lastEvent = null, now = Date.now() } = {}) {
+    this.starts = starts.filter((at) => now - at < 2 * 3600000).sort((a, b) => a - b);
+    if (lastEvent && now - lastEvent.at < 2 * 3600000) {
+      this.rateLimitHits.push(lastEvent.at);
+      this.cooldownUntil = Math.max(this.cooldownUntil, lastEvent.at + (lastEvent.cooldown_ms || 0));
+      this.holdUntil = Math.max(this.holdUntil, lastEvent.at + 2 * 3600000);
+      this.minDelayMs = Math.min(this.ceilingMs, Math.max(this.startMs * 2, this.minDelayMs));
+      this.lastPenalty = { reason: String(lastEvent.reason || 'rate limit (restored)').slice(0, 120), at: lastEvent.at, cooldown_ms: lastEvent.cooldown_ms || 0, rate_limit: true };
+    }
   }
 
   stats() {

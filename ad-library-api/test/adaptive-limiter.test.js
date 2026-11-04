@@ -93,3 +93,29 @@ test('the hourly budget delays the next request until the oldest one ages out; 0
   assert.strictEqual(make({ maxPerHour: 0 })._budgetWait(now), 0);
   assert.strictEqual(l.stats().max_per_hour, 5);
 });
+
+test('restore(): request history and a recent rate limit survive a restart; an old one does not', () => {
+  const now = Date.now();
+  const l = make({ maxPerHour: 3 });
+  l.restore({ starts: [now - 600000, now - 300000, now - 60000, now - 3 * 3600000], lastEvent: { at: now - 120000, reason: 'Rate limit exceeded', cooldown_ms: 300000 }, now });
+  assert.strictEqual(l.starts.length, 3, 'requests older than 2 h are dropped');
+  assert.ok(l._budgetWait(now) > 0, 'the restored history already fills the hourly budget');
+  assert.ok(l.cooldownUntil > now, 'the cool-down from before the restart is still in force');
+  assert.ok(l.holdUntil > now + 3600000, 'speed-up hold carried over');
+  assert.ok(l.minDelayMs >= 4000);
+  assert.strictEqual(l.stats().last_penalty.rate_limit, true);
+  const old = make();
+  old.restore({ starts: [], lastEvent: { at: now - 3 * 3600000, cooldown_ms: 300000 }, now });
+  assert.strictEqual(old.cooldownUntil, 0, 'a limit from 3 h ago is forgotten');
+  assert.strictEqual(old.minDelayMs, 2000);
+});
+
+test('the persisted request log round-trips and prunes', () => {
+  const rateEvents = require('../src/lib/rateEvents');
+  const now = Date.now();
+  rateEvents.logRequest(now - 10 * 3600000);
+  rateEvents.logRequest(now - 1000);
+  const recent = rateEvents.recentRequests(2 * 3600000, now);
+  assert.ok(recent.includes(now - 1000));
+  assert.ok(!recent.includes(now - 10 * 3600000), 'old rows are pruned');
+});

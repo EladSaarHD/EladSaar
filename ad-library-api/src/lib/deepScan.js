@@ -292,6 +292,21 @@ function createDensityBudget({ target, startUnique, cap, minSample = 100, minDen
   };
 }
 
+// Incremental scans: in newest-first order, once consecutive pages are almost entirely ads the tracker already
+// held BEFORE this scan, everything further back is old news. `isKnown(ad)` is supplied by the caller.
+function createKnownAdsStop({ isKnown, patience = 3, minPages = 3, ratio = 0.9 }) {
+  let pages = 0;
+  let knownPages = 0;
+  return (ads) => {
+    pages += 1;
+    const list = ads || [];
+    if (!list.length) return false;
+    const known = list.filter((ad) => isKnown(ad)).length;
+    knownPages = known / list.length >= ratio ? knownPages + 1 : 0;
+    return pages >= minPages && knownPages >= patience;
+  };
+}
+
 // Launch-window early exit for `recent` (month-grouped, newest first) scans. Ads arrive
 // grouped by launch month, newest month first, so once whole pages sit entirely in months
 // before the window's first month no later page can hold an in-window ad. Requires
@@ -309,7 +324,7 @@ function createWindowEarlyStop({ windowStart, patience = 2 }) {
 }
 
 module.exports = {
-  buildQueryPlan, buildScanShards, collectShardPages, createDensityBudget, createWindowEarlyStop, expandQueries, extractStoreDomain,
+  buildQueryPlan, buildScanShards, collectShardPages, createDensityBudget, createKnownAdsStop, createWindowEarlyStop, expandQueries, extractStoreDomain,
   filterAdsToShardWindow, isWithinShardWindow, normalizeQueryTerms, normalizeScanWindow, pageBudget,
   parseQueryTerms, scoreDropshippingAd, scoreMomentum, scoreScale,
 };

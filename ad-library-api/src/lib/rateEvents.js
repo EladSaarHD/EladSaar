@@ -16,6 +16,19 @@ db.exec(`
   );
 `);
 
+db.exec(`CREATE TABLE IF NOT EXISTS request_log (at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_request_log_at ON request_log(at);`);
+const logStmt = db.prepare('INSERT INTO request_log (at) VALUES (?)');
+
+// Persisted so the hourly budget and the "load before a rate limit" numbers survive restarts.
+function logRequest(at) {
+  try { logStmt.run(at); } catch { /* never let logging break a request */ }
+}
+
+function recentRequests(sinceMs, now = Date.now()) {
+  db.prepare('DELETE FROM request_log WHERE at < ?').run(now - 3 * 3600000);
+  return db.prepare('SELECT at FROM request_log WHERE at >= ? ORDER BY at ASC').all(now - sinceMs).map((row) => row.at);
+}
+
 const insertStmt = db.prepare(`INSERT INTO rate_limit_events (at, reason, requests_10m, requests_60m, delay_ms, cooldown_ms)
   VALUES (@at, @reason, @requests_10m, @requests_60m, @delay_ms, @cooldown_ms)`);
 
@@ -31,4 +44,4 @@ function countSince(ms, now = Date.now()) {
   return db.prepare('SELECT COUNT(*) AS n FROM rate_limit_events WHERE at >= ?').get(now - ms).n;
 }
 
-module.exports = { record, recent, countSince };
+module.exports = { record, recent, countSince, logRequest, recentRequests };

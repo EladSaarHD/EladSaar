@@ -289,3 +289,19 @@ test('Meta rate-limit responses are recognised (message or code) and are not mis
   assert.strictEqual(client.rateLimitFrom({ data: { ok: 1 }, errors: [{ message: 'Rate limit exceeded' }] }), null, 'real data wins');
   assert.strictEqual(client.isPressureSignal(new RateLimitedError()), true);
 });
+
+test('createKnownAdsStop stops after consecutive mostly-known pages, never before the minimum, and resets on new ads', () => {
+  const { createKnownAdsStop } = require('../src/lib/deepScan');
+  const known = new Set(['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'k10']);
+  const page = (ids) => ids.map((id) => ({ ad_archive_id: id }));
+  const allKnown = page([...known]);
+  const stop = createKnownAdsStop({ isKnown: (ad) => known.has(ad.ad_archive_id), patience: 3, minPages: 3 });
+  assert.strictEqual(stop(allKnown), false);
+  assert.strictEqual(stop(allKnown), false);
+  assert.strictEqual(stop(allKnown), true, 'three known pages and at least minPages');
+  const mixed = createKnownAdsStop({ isKnown: (ad) => known.has(ad.ad_archive_id), patience: 2, minPages: 1 });
+  assert.strictEqual(mixed(allKnown), false);
+  assert.strictEqual(mixed(page(['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9', 'k1'])), false, 'a page of new ads resets the streak');
+  assert.strictEqual(mixed(allKnown), false);
+  assert.strictEqual(mixed(allKnown), true);
+});

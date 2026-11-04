@@ -18,7 +18,8 @@ const {
   SORT_MODES,
 } = require('../constants');
 
-const limiter = new AdaptiveRateLimiter({ startMs: config.minRequestDelayMs, floorMs: config.fastestRequestDelayMs, maxPerHour: config.maxRequestsPerHour, concurrency: 1 });
+const limiter = new AdaptiveRateLimiter({ startMs: config.minRequestDelayMs, floorMs: config.fastestRequestDelayMs, maxPerHour: config.maxRequestsPerHour, onRequestStart: rateEvents.logRequest, concurrency: 1 });
+limiter.restore({ starts: rateEvents.recentRequests(2 * 3600000), lastEvent: rateEvents.recent(1)[0] || null });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

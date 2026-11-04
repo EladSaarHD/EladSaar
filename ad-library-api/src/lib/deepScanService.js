@@ -7,7 +7,7 @@ const { runListQuery } = require('./listQuery');
 const { CONTINUATION_PAGE_SIZE } = require('../constants');
 const {
   buildQueryPlan, buildScanShards, collectShardPages, createWindowEarlyStop, extractStoreDomain,
-  createDensityBudget, filterAdsToShardWindow, pageBudget, parseQueryTerms, normalizeScanWindow, scoreDropshippingAd,
+  createDensityBudget, createKnownAdsStop, filterAdsToShardWindow, pageBudget, parseQueryTerms, normalizeScanWindow, scoreDropshippingAd,
   scoreMomentum, scoreScale,
 } = require('./deepScan');
 const payloadStore = require('./payloadStore');
@@ -34,6 +34,9 @@ const updateProgressStmt = db.prepare(`UPDATE scan_jobs SET status=@status, comp
 const heartbeatStmt = db.prepare(`UPDATE scan_jobs SET unique_ads=(SELECT COUNT(*) FROM scan_ads WHERE scan_id=@id),
   discarded_ads=@discarded, updated_at=@now WHERE id=@id AND status='running'`);
 const getActiveJobStmt = db.prepare("SELECT * FROM scan_jobs WHERE status IN ('queued','running') ORDER BY created_at ASC LIMIT 1");
+// "Known" = the tracker held the ad before this scan was created (so ads found by this same scan never count).
+const knownBeforeStmt = db.prepare('SELECT 1 AS known FROM ad_registry WHERE ad_archive_id = ? AND first_seen < ?');
+const newAdsStmt = db.prepare('SELECT COUNT(*) AS n FROM scan_ads s JOIN ad_registry r ON r.ad_archive_id = s.ad_archive_id WHERE s.scan_id = ? AND r.first_seen >= ?');
 const getAdStmt = db.prepare('SELECT * FROM scan_ads WHERE scan_id=? AND ad_archive_id=?');
 const upsertAdStmt = db.prepare(`INSERT INTO scan_ads
   (scan_id,ad_archive_id,page_id,page_name,start_date,is_active,impressions_upper,momentum_score,dropship_score,
@@ -155,6 +158,8 @@ async function runScan(id, shards, config) {
   let skipped = 0;
   let continuationFailures = 0;
   let continuationReason = null;
+  let knownStops = 0;
+  const sinceCreated = getJobStmt.get(id)?.created_at || Date.now();
   let rateLimitAbort = null; // Meta said "Rate limit exceeded": stop the whole scan, keep what we have
   let continuationAtPage = null;
   let earlyStops = 0;
@@ -198,6 +203,16 @@ async function runScan(id, shards, config) {
       if (sortMode === 'recent' && !shard.pageId) {
         const windowStop = createWindowEarlyStop({ windowStart: shard.startDate });
         stopCheck = (ads, info) => { const stop = windowStop(ads, info); if (stop) earlyStops += 1; return stop; };
+      }
+      if (config.incremental && stopCheck) {
+        const knownStop = createKnownAdsStop({ isKnown: (ad) => Boolean(knownBeforeStmt.get(String(ad.ad_archive_id), sinceCreated)) });
+        const previousStop = stopCheck;
+        stopCheck = (ads, info) => {
+          if (previousStop(ads, info)) return true;
+          const stop = knownStop(ads);
+          if (stop) knownStops += 1;
+          return stop;
+        };
       }
       if (shard.origin && shard.origin !== 'seed') {
         const novelty = createNoveltyStop({ countUnique });
@@ -274,10 +289,13 @@ async function runScan(id, shards, config) {
     if (skipped) notes.push(`${skipped} shard(s) skipped after bounded retries; collected results remain usable`);
     if (continuationFailures) notes.push(`${continuationFailures} continuation cursor(s) failed mid-pagination (after ${continuationAtPage} page(s): ${continuationReason}); ads collected before the failure were preserved`);
     if (earlyStops) notes.push(`${earlyStops} shard(s) stopped early after paging past the ${config.lookbackDays}-day launch window`);
+    if (knownStops) notes.push(`Incremental: ${knownStops} shard(s) stopped after reaching ads the tracker already held (${newAdsStmt.get(id, sinceCreated).n} ad(s) were new to it)`);
     if (noveltyStops) notes.push(`${noveltyStops} expansion shard(s) stopped early because they only returned ads already collected`);
     if (discarded) notes.push(`Discarded ${discarded} out-of-window ad(s) with missing, invalid, or non-matching start_date.`);
     if (unique < config.targetAds) {
-      notes.push(continuationFailures
+      if (config.incremental && knownStops && !continuationFailures) {
+        // an incremental scan that reached known territory is complete, not short
+      } else notes.push(continuationFailures
         ? `Collected ${unique} unique ads of the ${config.targetAds} target. Collection stopped early because Meta ended a result chain (see above), so more matching ads may exist: split the search (different terms, countries or a shorter window) to reach them. No duplicate or invented ads were added.`
         : `Collected ${unique} unique ads of the ${config.targetAds} target. The selected countries, filters and ${config.lookbackDays}-day launch window were exhausted; no duplicate or invented ads were added.`);
     }
@@ -301,7 +319,8 @@ function createScan(input) {
   const terms = parseQueryTerms(input.queries, { exactPhrase }).slice(0, 30);
   const queries = terms.map((term) => term.text);
   const mode = input.mode === 'dropshipping' ? 'dropshipping' : 'deep';
-  const sort = String(input.sort || 'impressions').toLowerCase();
+  const incremental = Boolean(input.incremental);
+  const sort = incremental ? 'recent' : String(input.sort || 'impressions').toLowerCase(); // incremental needs newest-first
   if (!['impressions', 'recent'].includes(sort)) throw new Error('Invalid sort. Allowed: impressions, recent');
   const expansion = String(input.expansion || (mode === 'dropshipping' && !terms.length ? 'discovery' : 'none')).toLowerCase();
   if (!['none', 'modifiers', 'discovery'].includes(expansion)) throw new Error('Invalid expansion. Allowed: none, modifiers, discovery');
@@ -321,7 +340,7 @@ function createScan(input) {
   const config = { mode, queries, queryExpression: [...terms.map((t) => (t.exact ? `"${t.text}"` : t.text)), ...pageIds.map((id) => `page:${id}`)].join(' | '),
     exactTerms: terms.filter((t) => t.exact).map((t) => t.text), expansion, sort, pageIds,
     expandedQueries: plan.filter((entry) => entry.query).map((entry) => entry.query), countries, targetAds, lookbackDays,
-    windowDays: lookbackDays, activeStatus: input.activeStatus || 'active',
+    windowDays: lookbackDays, activeStatus: input.activeStatus || 'active', incremental,
     mediaType: input.mediaType || 'all', platform: input.platform || null };
   const shards = buildScanShards({ queries: plan, countries, lookbackDays,
     windowDays: lookbackDays, maxShards });
@@ -329,7 +348,7 @@ function createScan(input) {
   // connection mid-scan (fetch failed) can simply ask again and re-attach instead of colliding with it.
   const requestHash = crypto.createHash('sha1').update(JSON.stringify({
     plan: plan.map((entry) => [entry.query, entry.searchType, entry.pageId || null, entry.origin || 'seed']),
-    countries, targetAds, lookbackDays, sort, mode, activeStatus: config.activeStatus, mediaType: config.mediaType, platform: config.platform,
+    countries, targetAds, lookbackDays, sort, mode, incremental, activeStatus: config.activeStatus, mediaType: config.mediaType, platform: config.platform,
   })).digest('hex');
   const duplicate = findDuplicateStmt.get(requestHash);
   if (duplicate) return { ...parseJob(duplicate), attached_to_existing: true };

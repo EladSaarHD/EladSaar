@@ -76,3 +76,23 @@ test('checkCanary reuses a fresh result instead of hitting Meta again', async ()
   assert.ok(!fresh.cached);
   assert.ok(hits > before);
 });
+
+test('the canary is paused (not "failed") while Meta is rate-limiting, and makes no request', async () => {
+  const rateEvents = require('../src/lib/rateEvents');
+  const client = require('../src/lib/graphqlClient');
+  const { runCanary } = require('../src/lib/canary');
+  const realRequest = client.request;
+  let calls = 0;
+  client.request = async () => { calls += 1; throw new Error('must not be called'); };
+  try {
+    rateEvents.record({ at: Date.now() - 60000, reason: 'test rate limit', cooldown_ms: 300000 });
+    const result = await runCanary();
+    assert.strictEqual(result.skipped, true);
+    assert.strictEqual(result.ok, null, 'neither healthy nor broken');
+    assert.match(result.error, /rate-limited this connection recently/);
+    assert.strictEqual(calls, 0);
+  } finally {
+    client.request = realRequest;
+    require('../src/db').prepare("DELETE FROM rate_limit_events WHERE reason = 'test rate limit'").run();
+  }
+});

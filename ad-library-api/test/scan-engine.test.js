@@ -472,6 +472,44 @@ test('a Meta rate limit mid-chain stops the whole scan, keeps what was collected
   assert.strictEqual(service.listAds(id, { limit: 10 }).ads.length, 3, 'partial results stay viewable');
 });
 
+
+test('an incremental scan stops at ads the tracker already held, using far fewer requests than a full scan', async () => {
+  const config = { targetAds: 500, queries: ['inc term'], lookbackDays: 90, activeStatus: 'active', sort: 'recent', ...FAST };
+  const shard = { ...SHARD, query: 'inc term' };
+  const makeIncAd = (i) => makeAd(`INC-${i}`);
+  calls.length = 0;
+  script = pagedScript(200, { makeOne: makeIncAd });
+  const full = newJob(config, [shard]);
+  await service.runScan(full, [shard], config);
+  const fullCalls = calls.length;
+  assert.ok(fullCalls >= 15, `the full scan walked the whole chain (${fullCalls} requests)`);
+  assert.strictEqual(service.getJob(full).unique_ads, 200);
+  // new ads appeared at the front since the last scan; everything behind them is known
+  calls.length = 0;
+  script = pagedScript(215, { makeOne: (i) => makeIncAd(i < 15 ? 1000 + i : i - 15) });
+  const incConfig = { ...config, incremental: true };
+  await new Promise((resolve) => setTimeout(resolve, 5)); // job.created_at must be after the first scan's sightings
+  const inc = newJob(incConfig, [shard]);
+  await service.runScan(inc, [shard], incConfig);
+  const job = service.getJob(inc);
+  assert.ok(calls.length <= 8, `incremental used ${calls.length} requests instead of ${fullCalls}`);
+  assert.ok(job.unique_ads >= 15, 'the 15 new ads were collected');
+  assert.match(job.error || '', /Incremental: 1 shard\(s\) stopped after reaching ads the tracker already held \(15 ad\(s\) were new to it\)/);
+  assert.doesNotMatch(job.error || '', /exhausted/, 'reaching known territory is a complete scan, not a shortfall');
+});
+
+test('createScan: incremental forces newest-first and is part of the request identity', async () => {
+  script = () => ({ ads: [], page_info: { has_next_page: false, end_cursor: null }, count: 0 });
+  const a = service.createScan({ queries: ['inc identity'], lookbackDays: 30, targetAds: 30, sort: 'impressions', incremental: true });
+  assert.strictEqual(a.config.incremental, true);
+  assert.strictEqual(a.config.sort, 'recent');
+  for (let i = 0; i < 100 && ['queued', 'running'].includes(service.getJob(a.id).status); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  const b = service.createScan({ queries: ['inc identity'], lookbackDays: 30, targetAds: 30, sort: 'recent' });
+  assert.notStrictEqual(b.id, a.id);
+  assert.strictEqual(b.config.incremental, false);
+  for (let i = 0; i < 100 && ['queued', 'running'].includes(service.getJob(b.id).status); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });

@@ -11,7 +11,7 @@ import {
 const initialFilters = {
   queries: 'running shoes', country: 'US', activeStatus: 'active', mediaType: 'all',
   platform: '', startDate: '', endDate: '', limit: 12, targetAds: 500,
-  scanCountries: ['US'], lookbackDays: 14, scanSort: 'impressions',
+  scanCountries: ['US'], lookbackDays: 14, scanSort: 'impressions', incremental: false,
 };
 
 function daysRunning(date) {
@@ -87,6 +87,13 @@ function App() {
   const [stores, setStores] = useState([]);
   const [storeTotal, setStoreTotal] = useState(0);
   const [recentScans, setRecentScans] = useState([]);
+
+  // Keep the header honest about Meta's pace / rate limit without a page reload.
+  useEffect(() => {
+    const poll = () => fetch('/api/health').then((r) => r.json()).then(setHealth).catch(() => setHealth({ ok: false }));
+    const timer = setInterval(poll, 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     fetch('/api/health').then((r) => r.json()).then(setHealth).catch(() => setHealth({ ok: false }));
@@ -167,7 +174,7 @@ function App() {
         body: JSON.stringify({
           mode: workspaceMode === 'dropshipping' ? 'dropshipping' : 'deep',
           queries, sort: filters.scanSort, countries: filters.scanCountries,
-          targetAds: Number(filters.targetAds), lookbackDays: Number(filters.lookbackDays),
+          targetAds: Number(filters.targetAds), lookbackDays: Number(filters.lookbackDays), incremental: filters.scanSort === 'recent' && Boolean(filters.incremental),
           activeStatus: filters.activeStatus, mediaType: filters.mediaType, platform: filters.platform,
         }),
       });
@@ -250,7 +257,16 @@ function App() {
         <div className="brand"><div className="brand-mark"><Zap size={19} /></div><div><strong>AdSignal</strong><span>Meta intelligence</span></div></div>
         <div className="top-actions">
           {health?.ok && <span className="cache-status">{health.cache?.rows || 0} cached responses</span>}
-          <span className={`status ${health?.ok ? 'online' : health?.ok === false ? 'offline' : ''}`}><i />{health?.ok ? 'Connected' : health?.ok === false ? 'Offline' : 'Checking'}</span>
+          {(() => {
+            const pace = health?.pacing;
+            const coolMinutes = pace?.cooling_down_ms > 0 ? Math.max(1, Math.round(pace.cooling_down_ms / 60000)) : 0;
+            const slowed = pace?.hold_ms > 0;
+            const cls = health?.ok ? (coolMinutes || slowed ? 'warn' : 'online') : health?.ok === false ? 'offline' : '';
+            const label = !health ? 'Checking' : health.ok === false ? 'Offline'
+              : coolMinutes ? `Meta rate limit · resuming in ~${coolMinutes} min`
+              : slowed ? 'Connected · Meta limited us recently, scans run slower' : 'Connected';
+            return <span className={`status ${cls}`}><i />{label}</span>;
+          })()}
           <button className="icon-button mobile-only" onClick={() => setFiltersOpen(!filtersOpen)} aria-label="Toggle filters"><Menu size={20} /></button>
         </div>
       </header>
@@ -288,6 +304,7 @@ function App() {
             <div className="country-picker"><span>Countries</span><div className="country-chips">{COUNTRY_OPTIONS.map((country) => <button type="button" key={country} className={filters.scanCountries.includes(country) ? 'active' : ''} onClick={() => update('scanCountries', toggleCountry(filters.scanCountries, country))}>{country}</button>)}</div></div>
             <label><span>Launch window</span><select value={filters.lookbackDays} onChange={(e) => update('lookbackDays', e.target.value)}>{SCAN_WINDOWS.map((days) => <option key={days} value={days}>{days} days</option>)}</select></label>
             <label><span>Collect in order</span><select value={filters.scanSort} onChange={(e) => update('scanSort', e.target.value)}>{SCAN_ORDERS.map((order) => <option key={order.value} value={order.value}>{order.label}</option>)}</select></label>
+            {filters.scanSort === 'recent' && <label className="inline-check"><span>Only ads new to the tracker</span><input type="checkbox" checked={Boolean(filters.incremental)} onChange={(e) => update('incremental', e.target.checked)} /></label>}
             <div className="scan-note"><Activity size={15} /><span>One scan at a time; results stream in and stay local. Put a phrase in "quotes" for an exact match. “Newest launches” finds new ads fastest for short windows.</span></div>
           </div>}
           <div className={`filters ${workspaceMode !== 'search' ? 'scan-filters' : ''} ${filtersOpen ? 'open' : ''}`}>
