@@ -449,6 +449,29 @@ test('storage diet: ads are stored once, compressed; scan rows stay small; legac
   assert.strictEqual(service.listAds(legacy, { limit: 5 }).ads[0].creative.body, 'old inline body');
 });
 
+
+test('a Meta rate limit mid-chain stops the whole scan, keeps what was collected, and skips the remaining shards', async () => {
+  const { RateLimitedError } = require('../src/lib/errors');
+  const seenQueries = [];
+  let page = 0;
+  script = (params, variables) => {
+    seenQueries.push(variables.queryString);
+    page += 1;
+    if (page === 1) return { ads: [makeAd('RL-1'), makeAd('RL-2'), makeAd('RL-3')], page_info: { has_next_page: true, end_cursor: 'c1' }, count: 100 };
+    throw new RateLimitedError('Meta rate limit exceeded (Rate limit exceeded)');
+  };
+  const config = { targetAds: 500, queries: ['rl one', 'rl two'], lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shards = [{ ...SHARD, query: 'rl one' }, { ...SHARD, query: 'rl two' }];
+  const id = newJob(config, shards);
+  await service.runScan(id, shards, config);
+  const job = service.getJob(id);
+  assert.strictEqual(job.status, 'failed');
+  assert.match(job.error, /Stopped by Meta's rate limit after collecting 3 ad/);
+  assert.strictEqual(job.unique_ads, 3, 'the ads collected before the limit are kept');
+  assert.ok(!seenQueries.includes('rl two'), 'the second shard never ran: it would only hit the same limit');
+  assert.strictEqual(service.listAds(id, { limit: 10 }).ads.length, 3, 'partial results stay viewable');
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });

@@ -155,6 +155,7 @@ async function runScan(id, shards, config) {
   let skipped = 0;
   let continuationFailures = 0;
   let continuationReason = null;
+  let rateLimitAbort = null; // Meta said "Rate limit exceeded": stop the whole scan, keep what we have
   let continuationAtPage = null;
   let earlyStops = 0;
   let noveltyStops = 0;
@@ -238,11 +239,13 @@ async function runScan(id, shards, config) {
           continuationFailures += 1;
           continuationReason = continuationReason || String(result.pageError.message || result.pageError).slice(0, 140);
           continuationAtPage = continuationAtPage || result.pages;
+          if (result.pageError.code === 'rate_limited') rateLimitAbort = result.pageError;
           console.warn(`[scan ${id.slice(0, 8)}] chain for "${label}" stopped after ${result.pages} page(s): ${continuationReason}`);
         }
       } catch (error) {
         skipped += 1;
         lastError = error;
+        if (error.code === 'rate_limited') rateLimitAbort = error;
       }
       completed += 1;
       const unique = countUnique();
@@ -255,9 +258,18 @@ async function runScan(id, shards, config) {
       }
       updateProgressStmt.run({ id, status: unique >= config.targetAds ? 'complete' : 'running', completed, discarded, error: warnings.join('. ') || null, now: Date.now() });
       if (unique >= config.targetAds) break;
+      if (rateLimitAbort) break; // the remaining shards would only hit the same limit
       await sleep(config.requestPauseMs ?? 1000);
     }
     const unique = countUnique();
+    if (rateLimitAbort) {
+      const kept = countUnique();
+      const pacing = getPacing();
+      const minutes = Math.max(5, Math.ceil((pacing.cooling_down_ms || 300000) / 60000));
+      updateProgressStmt.run({ id, status: 'failed', completed, discarded, now: Date.now(),
+        error: `Stopped by Meta's rate limit after collecting ${kept} ad(s) (kept and viewable). Wait about ${minutes} minutes and run it again.` });
+      return;
+    }
     const notes = [];
     if (skipped) notes.push(`${skipped} shard(s) skipped after bounded retries; collected results remain usable`);
     if (continuationFailures) notes.push(`${continuationFailures} continuation cursor(s) failed mid-pagination (after ${continuationAtPage} page(s): ${continuationReason}); ads collected before the failure were preserved`);
@@ -337,10 +349,20 @@ function createScan(input) {
 // Single worker: scans run one at a time (Meta politeness), FIFO. A finished/failed scan hands over to
 // the next queued one; queued scans survive a restart.
 let worker = null;
+let pumpTimer = null;
 function pump() {
   if (worker) return;
   const row = getQueuedStmt.get();
   if (!row) return;
+  // While Meta's rate-limit cool-down is running, hold queued scans instead of letting each one burn its retries.
+  const cooling = getPacing().cooling_down_ms;
+  if (cooling > 0) {
+    if (!pumpTimer) {
+      pumpTimer = setTimeout(() => { pumpTimer = null; pump(); }, Math.min(cooling + 1000, 60000));
+      pumpTimer.unref?.();
+    }
+    return;
+  }
   let shards;
   let config;
   try {
