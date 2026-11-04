@@ -1,7 +1,7 @@
 'use strict';
 
 const config = require('../../config');
-const { httpFetch } = require('./http');
+const { httpFetch, readText } = require('./http');
 const { UpstreamBlockedError } = require('./errors');
 const {
   LIBRARY_URL,
@@ -122,7 +122,7 @@ async function fetchDocument(url) {
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
     res = await httpFetch(url, { headers, redirect: 'follow' });
-    html = await res.text();
+    html = await readText(res);
     if (res.ok) break;
 
     const challengePath = res.status === 403 ? extractChallengePath(html) : null;
@@ -143,7 +143,7 @@ async function fetchDocument(url) {
       },
     });
     const receivedCookie = cookieFromSetCookie(getSetCookies(challengeRes));
-    await challengeRes.text();
+    await readText(challengeRes);
 
     if (challengeRes.ok && receivedCookie) {
       challengeCookie = mergeCookieStrings(challengeCookie, receivedCookie);
@@ -151,7 +151,7 @@ async function fetchDocument(url) {
         headers: { ...headers, cookie: challengeCookie },
         redirect: 'follow',
       });
-      html = await res.text();
+      html = await readText(res);
       if (res.ok) break;
     }
 

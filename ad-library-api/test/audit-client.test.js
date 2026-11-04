@@ -216,3 +216,34 @@ test('pressure signals are recognised, coded rejections are not', () => {
   assert.strictEqual(client.isPressureSignal(new Error('boom')), false);
   assert.strictEqual(typeof client.getPacing().delay_ms, 'number');
 });
+
+test('a connection dropped while reading the body becomes a retryable upstream error, not a raw TypeError', async () => {
+  const { readText } = require('../src/lib/http');
+  const { UpstreamBlockedError } = require('../src/lib/errors');
+  const dropped = { text: async () => { throw new TypeError('terminated'); } };
+  await assert.rejects(readText(dropped), (err) => err instanceof UpstreamBlockedError && err.retryable === 'backoff' && /terminated/.test(err.message));
+  assert.strictEqual(await readText({ text: async () => 'ok' }), 'ok');
+  assert.strictEqual(client.isPressureSignal(await readText(dropped).catch((e) => e)), true);
+});
+
+test('httpFetch enforces a hard timeout and reports it as a retryable network fault (no more 5-minute stalls)', async () => {
+  const http = require('http');
+  const { httpFetch } = require('../src/lib/http');
+  const { UpstreamBlockedError } = require('../src/lib/errors');
+  // a server that accepts the request and then never answers
+  const server = http.createServer(() => {});
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const started = Date.now();
+  try {
+    await assert.rejects(httpFetch(url, { timeoutMs: 300 }), (err) => err instanceof UpstreamBlockedError && err.retryable === 'backoff' && /timed out after/.test(err.message));
+    assert.ok(Date.now() - started < 3000, 'gave up quickly instead of hanging');
+    // a stalled BODY is covered too: headers arrive, the body never finishes
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => { res.writeHead(200, { 'content-length': '100' }); res.write('partial'); });
+    const { readText } = require('../src/lib/http');
+    const res = await httpFetch(url, { timeoutMs: 400 });
+    await assert.rejects(readText(res), (err) => err instanceof UpstreamBlockedError && err.retryable === 'backoff');
+  } finally { server.closeAllConnections?.(); server.close(); }
+});
+

@@ -26,16 +26,38 @@ if (config.proxyUrl) {
 // return a response, so we translate those into a typed, retryable upstream
 // error.
 async function httpFetch(url, options = {}) {
+  // A hard ceiling on the WHOLE exchange (headers + body): without one, a socket that Meta stops answering
+  // stalls a scan until undici gives up after ~5 minutes with a bare `terminated`. A timeout is reported as
+  // the same retryable network fault so the existing backoff/retry path handles it.
+  const timeoutMs = options.timeoutMs || config.requestTimeoutMs;
+  const { timeoutMs: _ignored, ...fetchOptions } = options;
+  if (timeoutMs > 0 && !fetchOptions.signal) fetchOptions.signal = AbortSignal.timeout(timeoutMs);
   try {
-    if (dispatcher && proxyFetch) return await proxyFetch(url, { ...options, dispatcher });
-    return await fetch(url, options);
+    if (dispatcher && proxyFetch) return await proxyFetch(url, { ...fetchOptions, dispatcher });
+    return await fetch(url, fetchOptions);
   } catch (err) {
+    const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
     const wrapped = new UpstreamBlockedError(
-      `Network request to Facebook failed (${err.cause?.code || err.message})`
+      `Network request to Facebook failed (${timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : err.cause?.code || err.message})`
     );
     wrapped.retryable = 'backoff';
     throw wrapped;
   }
 }
 
-module.exports = { httpFetch };
+// Reading the body can fail AFTER the headers arrived (connection reset / `terminated` mid-stream). That is
+// the same transient network fault as a failed request and must go through the same retry path instead of
+// escaping as a raw TypeError that fails the whole shard.
+async function readText(res) {
+  try {
+    return await res.text();
+  } catch (err) {
+    const wrapped = new UpstreamBlockedError(
+      `Network request to Facebook failed (reading response: ${err.name === 'TimeoutError' || err.name === 'AbortError' ? 'timed out' : err.cause?.code || err.message})`
+    );
+    wrapped.retryable = 'backoff';
+    throw wrapped;
+  }
+}
+
+module.exports = { httpFetch, readText };

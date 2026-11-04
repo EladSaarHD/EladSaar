@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const config = require('../../config');
 const session = require('./session');
-const { httpFetch } = require('./http');
+const { httpFetch, readText } = require('./http');
 const { AdaptiveRateLimiter } = require('./rateLimiter');
 const { TokenExpiredError, UpstreamBlockedError } = require('./errors');
 const {
@@ -363,7 +363,7 @@ async function attempt({ kind, variables, force }) {
     throw err;
   }
 
-  const json = parseResponse(await res.text());
+  const json = parseResponse(await readText(res));
 
   if (isStaleSession(json)) {
     const err = new TokenExpiredError('Upstream reported a stale session (1357004)');

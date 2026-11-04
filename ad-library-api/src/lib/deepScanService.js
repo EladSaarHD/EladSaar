@@ -205,7 +205,8 @@ async function runScan(id, shards, config) {
         const result = await collectShardPages({
           initialParams,
           targetAds: config.targetAds,
-          maxPages: config.maxPagesPerShard || pageBudget(config.targetAds - countUnique(), { cap: 400 }),
+          // 1,100 pages ≈ 11,000 ads: enough for the largest allowed target (10,000) in one shard
+          maxPages: config.maxPagesPerShard || pageBudget(config.targetAds - countUnique(), { cap: 1100 }),
           fetchPage,
           saveAds: (ads) => {
             const filtered = shard.pageId ? { ads, discarded: 0 } : filterAdsToShardWindow(ads, shard);
