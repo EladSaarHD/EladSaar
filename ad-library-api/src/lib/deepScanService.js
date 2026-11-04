@@ -10,6 +10,7 @@ const {
   filterAdsToShardWindow, pageBudget, parseQueryTerms, normalizeScanWindow, scoreDropshippingAd,
   scoreMomentum, scoreScale,
 } = require('./deepScan');
+const payloadStore = require('./payloadStore');
 const registry = require('./registry');
 
 const createJobStmt = db.prepare(`INSERT INTO scan_jobs
@@ -98,7 +99,11 @@ function mergeUnique(existing, value) {
   return values;
 }
 
-function saveAd(scanId, ad, query, country, { rank = null, seed = true } = {}) {
+function saveAd(scanId, ad, query, country, opts = {}) {
+  db.transaction(() => saveAdRows(scanId, ad, query, country, opts))();
+}
+
+function saveAdRows(scanId, ad, query, country, { rank = null, seed = true } = {}) {
   if (!ad.ad_archive_id) return;
   const existing = getAdStmt.get(scanId, ad.ad_archive_id);
   const dropship = scoreDropshippingAd(ad);
@@ -115,9 +120,10 @@ function saveAd(scanId, ad, query, country, { rank = null, seed = true } = {}) {
     signals_json: JSON.stringify(dropship.signals),
     matched_queries_json: JSON.stringify(mergeUnique(existing?.matched_queries_json, query)),
     countries_json: JSON.stringify(mergeUnique(existing?.countries_json, country)),
-    payload_json: JSON.stringify(payload), first_seen: existing?.first_seen || now, last_seen: now,
+    payload_json: '', first_seen: existing?.first_seen || now, last_seen: now,
     meta_rank: rank, variant_count: scale.variants, scale_score: scale.score,
   });
+  payloadStore.save(ad.ad_archive_id, payload, now);
   registry.recordSighting(scanId, ad, { domain: extractStoreDomain(ad), scale, now, seedHit: seed });
 }
 
@@ -354,10 +360,15 @@ function listAds(id, options = {}) {
   const onlyImpressions = options.onlyImpressions ? 1 : 0;
   const where = 'scan_id = ? AND dropship_score >= ? AND scale_score >= ? AND (? = 0 OR impressions_upper IS NOT NULL)';
   const total = db.prepare(`SELECT COUNT(*) AS n FROM scan_ads WHERE ${where}`).get(id, minDropship, minScale, onlyImpressions).n;
-  const rows = db.prepare(`SELECT * FROM scan_ads WHERE ${where} ORDER BY ${order} LIMIT ? OFFSET ?`).all(id, minDropship, minScale, onlyImpressions, limit, offset);
+  const rows = db.prepare(`SELECT s.*, p.payload AS stored_payload FROM scan_ads s
+    LEFT JOIN ad_payloads p ON p.ad_archive_id = s.ad_archive_id
+    WHERE ${where.replace(/\b(scan_id|dropship_score|scale_score|impressions_upper)\b/g, 's.$1')} ORDER BY ${order} LIMIT ? OFFSET ?`).all(id, minDropship, minScale, onlyImpressions, limit, offset);
   return { total, limit, offset, ads: rows.map((row) => {
     const matched = JSON.parse(row.matched_queries_json);
-    return { ...JSON.parse(row.payload_json),
+    // Scan-specific numbers come from this scan's own columns (the shared payload is the latest version).
+    return { ...payloadStore.payloadOf(row),
+      scale_score: row.scale_score, variant_count: row.variant_count,
+      dropship_score: row.dropship_score, momentum_score: row.momentum_score, impressions_upper: row.impressions_upper,
       matched_queries: matched, matched_seed: matched.some((query) => seeds.has(query)), meta_rank: row.meta_rank,
       countries: JSON.parse(row.countries_json),
       dropship_signals: JSON.parse(row.signals_json), first_seen: row.first_seen, last_seen: row.last_seen };
@@ -365,10 +376,13 @@ function listAds(id, options = {}) {
 }
 
 function listStores(id, options = {}) {
-  const rows = db.prepare('SELECT payload_json, matched_queries_json, countries_json FROM scan_ads WHERE scan_id=?').all(id);
+  const rows = db.prepare(`SELECT s.payload_json, p.payload AS stored_payload, s.matched_queries_json, s.countries_json,
+    s.scale_score, s.variant_count, s.dropship_score, s.momentum_score, s.impressions_upper
+    FROM scan_ads s LEFT JOIN ad_payloads p ON p.ad_archive_id = s.ad_archive_id WHERE s.scan_id=?`).all(id);
   const stores = new Map();
   for (const row of rows) {
-    const ad = JSON.parse(row.payload_json);
+    const ad = { ...payloadStore.payloadOf(row), scale_score: row.scale_score, variant_count: row.variant_count,
+      dropship_score: row.dropship_score, momentum_score: row.momentum_score, impressions_upper: row.impressions_upper };
     const domain = extractStoreDomain(ad);
     if (!domain) continue;
     const store = stores.get(domain) || { domain, page_names: new Set(), ad_count: 0, active_ads: 0,

@@ -4,6 +4,7 @@
 // this keeps ONE row per distinct ad (first/last sighting, liveness, scale) so the questions that
 // only make sense across days can be asked: what is new, what has run longest, who is scaling.
 const db = require('../db');
+const payloadStore = require('./payloadStore');
 
 const upsertStmt = db.prepare(`INSERT INTO ad_registry
   (ad_archive_id,page_id,page_name,domain,link_url,start_date,end_date,is_active,first_seen,last_seen,
@@ -101,14 +102,17 @@ function listAds(options = {}) {
   const { where, args } = buildFilters(options);
   const order = AD_SORTS[options.sort] || AD_SORTS.new;
   const total = db.prepare(`SELECT COUNT(*) AS n FROM ad_registry r WHERE ${where}`).get(...args).n;
-  const rows = db.prepare(`SELECT r.*, s.payload_json FROM ad_registry r
+  const rows = db.prepare(`SELECT r.*, s.payload_json, p.payload AS stored_payload FROM ad_registry r
     LEFT JOIN scan_ads s ON s.scan_id = r.last_scan_id AND s.ad_archive_id = r.ad_archive_id
+    LEFT JOIN ad_payloads p ON p.ad_archive_id = r.ad_archive_id
     WHERE ${where} ORDER BY ${order} LIMIT ? OFFSET ?`).all(...args, limit, offset);
   return {
     total, limit, offset,
     ads: rows.map((row) => {
-      const { payload_json: payload, ...meta } = row;
-      const ad = payload ? JSON.parse(payload) : {
+      const { payload_json: inline, stored_payload: shared, ...meta } = row;
+      // the shared (latest) payload is the freshest; an inline snapshot is only the pre-diet fallback
+      const payload = shared ? payloadStore.decode(shared) : (inline ? JSON.parse(inline) : null);
+      const ad = payload ? payload : {
         ad_archive_id: meta.ad_archive_id, page_id: meta.page_id, page_name: meta.page_name,
         start_date: meta.start_date, end_date: meta.end_date, is_active: Boolean(meta.is_active),
         creative: { link_url: meta.link_url },

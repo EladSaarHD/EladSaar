@@ -418,6 +418,37 @@ test('a scan interrupted by a restart is re-queued once; a second interruption f
   assert.strictEqual(service.getJob(first).status, 'complete');
 });
 
+
+test('storage diet: ads are stored once, compressed; scan rows stay small; legacy inline rows still read', async () => {
+  script = (params, variables) => ({ ads: [makeAd('DIET-1'), makeAd('DIET-2')], page_info: { has_next_page: false, end_cursor: null }, count: 2 });
+  const config = { targetAds: 30, queries: ['diet'], lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shard = { ...SHARD, query: 'diet' };
+  const first = newJob(config, [shard]);
+  await service.runScan(first, [shard], config);
+  const second = newJob(config, [shard]);
+  await service.runScan(second, [shard], config);
+  // scan rows carry no inline payload; exactly one shared copy exists per distinct ad
+  assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM scan_ads WHERE scan_id IN (?,?) AND payload_json <> ''").get(first, second).n, 0);
+  assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM ad_payloads WHERE ad_archive_id IN ('DIET-1','DIET-2')").get().n, 2);
+  assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM scan_ads WHERE ad_archive_id='DIET-1' AND scan_id IN (?,?)").get(first, second).n, 2, 'both sightings are kept');
+  // both scans list the full ad, with this scan's own scores
+  for (const id of [first, second]) {
+    const ads = service.listAds(id, { limit: 10 }).ads;
+    assert.deepStrictEqual(ads.map((ad) => ad.ad_archive_id).sort(), ['DIET-1', 'DIET-2']);
+    assert.ok(ads[0].creative && ads[0].page_name, 'payload fields are present');
+    assert.strictEqual(typeof ads[0].scale_score, 'number');
+  }
+  assert.ok(service.listStores(first).stores.length >= 1);
+  // a legacy row (inline JSON, no shared copy) is still readable
+  const legacy = crypto.randomUUID();
+  const now = Date.now();
+  db.prepare(`INSERT INTO scan_jobs (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at) VALUES (?, 'complete', ?, 1, 1, 1, 0, ?, ?)`).run(legacy, JSON.stringify(config), now, now);
+  db.prepare(`INSERT INTO scan_ads (scan_id,ad_archive_id,page_id,page_name,start_date,is_active,impressions_upper,momentum_score,dropship_score,signals_json,matched_queries_json,countries_json,payload_json,first_seen,last_seen)
+    VALUES (?, 'LEGACY-1', 'p', 'Legacy Page', '2026-10-30', 1, NULL, 1, 1, '[]', '["diet"]', '["US"]', ?, ?, ?)`)
+    .run(legacy, JSON.stringify({ ad_archive_id: 'LEGACY-1', page_name: 'Legacy Page', creative: { body: 'old inline body' } }), now, now);
+  assert.strictEqual(service.listAds(legacy, { limit: 5 }).ads[0].creative.body, 'old inline body');
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
