@@ -70,7 +70,7 @@ if (!scanJobColumns.has('discarded_ads')) {
 
 // Scan queue: the shard plan is persisted so queued scans survive a restart, and request_hash lets an
 // identical request (e.g. a client retrying after a dropped connection) attach to the live job.
-for (const [name, ddl] of [['shards_json', 'TEXT'], ['request_hash', 'TEXT']]) {
+for (const [name, ddl] of [['shards_json', 'TEXT'], ['request_hash', 'TEXT'], ['attempts', 'INTEGER NOT NULL DEFAULT 0']]) {
   if (!scanJobColumns.has(name)) db.exec(`ALTER TABLE scan_jobs ADD COLUMN ${name} ${ddl}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_scan_jobs_hash ON scan_jobs(request_hash, status)');

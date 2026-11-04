@@ -52,9 +52,20 @@ const upsertAdStmt = db.prepare(`INSERT INTO scan_ads
 // Scan workers live in this Node process. A queued/running row found at boot
 // was interrupted and must not block future scans indefinitely.
 // (Queued scans that already have a shard plan are kept and resumed by pump() below.)
-db.prepare(`UPDATE scan_jobs SET status='failed',
-  error=COALESCE(error || ' ', '') || 'Interrupted by service restart; collected results remain available.',
-  updated_at=? WHERE status='running' OR (status='queued' AND shards_json IS NULL)`).run(Date.now());
+// A scan that was RUNNING when the service stopped is re-queued once (its writes are idempotent upserts, so
+// starting over only fills gaps); a second interruption, or a job with no stored plan, is failed with its
+// partial results kept — a scan that keeps crashing the service must not loop forever.
+function recoverInterruptedScans() {
+  const now = Date.now();
+  const resumed = db.prepare(`UPDATE scan_jobs SET status='queued', attempts=attempts+1, updated_at=?,
+    error='Resumed after a service restart.'
+    WHERE status='running' AND shards_json IS NOT NULL AND attempts < 1`).run(now).changes;
+  const failed = db.prepare(`UPDATE scan_jobs SET status='failed',
+    error=COALESCE(error || ' ', '') || 'Interrupted by service restart; collected results remain available.',
+    updated_at=? WHERE status='running' OR (status='queued' AND shards_json IS NULL)`).run(now).changes;
+  return { resumed, failed };
+}
+recoverInterruptedScans();
 
 // Progress: finished scans are 100%. While running, take the larger of shard progress and
 // collected/target, capped at 99 — a one-shard scan that has gathered 600 of 1,000 ads is 60%
@@ -399,4 +410,4 @@ function latestScans(limit = 10) {
   return db.prepare('SELECT * FROM scan_jobs ORDER BY created_at DESC LIMIT ?').all(Math.min(Number(limit) || 10, 50)).map(parseJob);
 }
 
-module.exports = { createScan, getJob, listAds, listStores, latestScans, runScan, createNoveltyStop, pump };
+module.exports = { createScan, getJob, listAds, listStores, latestScans, runScan, createNoveltyStop, pump, recoverInterruptedScans };

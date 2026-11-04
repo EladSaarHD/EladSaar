@@ -390,6 +390,34 @@ test('queued scans with a stored plan are resumed by pump() (restart safety)', a
   assert.strictEqual(service.getJob(id).unique_ads, 1);
 });
 
+
+test('a scan interrupted by a restart is re-queued once; a second interruption fails it but keeps results', async () => {
+  script = () => ({ ads: [makeAd('RECOVER-1')], page_info: { has_next_page: false, end_cursor: null }, count: 1 });
+  const config = { mode: 'deep', queries: ['recover me'], targetAds: 30, lookbackDays: 30, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const plan = JSON.stringify([{ ...SHARD, query: 'recover me' }]);
+  const insert = db.prepare(`INSERT INTO scan_jobs (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at,shards_json,request_hash,attempts)
+    VALUES (?, 'running', ?, 1, 0, 5, 0, ?, ?, ?, ?, ?)`);
+  const first = crypto.randomUUID();
+  const again = crypto.randomUUID();
+  const noPlan = crypto.randomUUID();
+  const now = Date.now();
+  insert.run(first, JSON.stringify(config), now, now, plan, 'h-first', 0);
+  insert.run(again, JSON.stringify(config), now, now, plan, 'h-again', 1);
+  db.prepare(`INSERT INTO scan_jobs (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at)
+    VALUES (?, 'running', ?, 1, 0, 0, 0, ?, ?)`).run(noPlan, JSON.stringify(config), now, now);
+  const outcome = service.recoverInterruptedScans();
+  assert.strictEqual(outcome.resumed, 1);
+  assert.strictEqual(service.getJob(first).status, 'queued');
+  assert.strictEqual(service.getJob(again).status, 'failed');
+  assert.match(service.getJob(again).error, /Interrupted by service restart/);
+  assert.strictEqual(service.getJob(noPlan).status, 'failed');
+  service.pump();
+  for (let i = 0; i < 200 && service.getJob(first).status !== 'complete'; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.strictEqual(service.getJob(first).status, 'complete');
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
