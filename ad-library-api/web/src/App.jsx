@@ -49,6 +49,9 @@ export function ScanTiming({ job }) {
   if (job.status === 'queued') {
     return <>{job.queue_position > 0 ? `${job.queue_position} scan${job.queue_position === 1 ? '' : 's'} ahead in the queue. ` : 'Starting… '}</>;
   }
+  if (job.paused_ms > 0) {
+    return <>Meta asked us to slow down, so the scan is waiting about {Math.max(1, Math.round(job.paused_ms / 60000))} min before it continues (nothing is lost). </>;
+  }
   const seconds = (Date.now() - start.current.at) / 1000;
   const gained = job.unique_ads - start.current.ads;
   const progressGained = job.progress - start.current.progress;

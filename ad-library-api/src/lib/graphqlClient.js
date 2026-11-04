@@ -4,8 +4,9 @@ const crypto = require('crypto');
 const config = require('../../config');
 const session = require('./session');
 const { httpFetch, readText } = require('./http');
+const rateEvents = require('./rateEvents');
 const { AdaptiveRateLimiter } = require('./rateLimiter');
-const { TokenExpiredError, UpstreamBlockedError } = require('./errors');
+const { RateLimitedError, TokenExpiredError, UpstreamBlockedError } = require('./errors');
 const {
   GRAPHQL_URL,
   LIBRARY_URL,
@@ -17,7 +18,7 @@ const {
   SORT_MODES,
 } = require('../constants');
 
-const limiter = new AdaptiveRateLimiter({ startMs: config.minRequestDelayMs, floorMs: config.fastestRequestDelayMs, concurrency: 1 });
+const limiter = new AdaptiveRateLimiter({ startMs: config.minRequestDelayMs, floorMs: config.fastestRequestDelayMs, maxPerHour: config.maxRequestsPerHour, concurrency: 1 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -50,6 +51,29 @@ function isStaleSession(json) {
 // array) with HTTP 200 and `payload: null`, e.g. 1357054 "Your Request Couldn't be
 // Processed". Surface the real code instead of a generic "empty payload" so a drift in
 // what Meta accepts is diagnosable from the first failed scan.
+// Meta's rate-limit signals: the message text and the classic API codes (4 app limit, 17 user limit, 32 page
+// limit, 341 app limit, 368 temporarily blocked, 613 call-count limit, 80004).
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 341, 368, 613, 80004]);
+function isRateLimitText(text) {
+  return /rate.?limit|too many (requests|calls)|temporarily blocked|slow down/i.test(String(text || ''));
+}
+
+// A response that says "slow down", whether as a GraphQL error message or as a coded top-level rejection.
+function rateLimitFrom(json) {
+  if (!json || json.data) return null;
+  if (Array.isArray(json.errors) && json.errors.length) {
+    const msg = json.errors[0] && json.errors[0].message;
+    if (isRateLimitText(msg)) return new RateLimitedError(`Meta rate limit exceeded (${String(msg).slice(0, 80)})`);
+  }
+  if (json.error !== undefined && json.error !== null) {
+    const code = Number(json.error);
+    if (RATE_LIMIT_CODES.has(code) || isRateLimitText(json.errorSummary) || isRateLimitText(json.errorDescription)) {
+      return new RateLimitedError(`Meta rate limit exceeded (error ${code})`);
+    }
+  }
+  return null;
+}
+
 function upstreamRejection(json) {
   if (!json || json.data || json.error === undefined || json.error === null) return null;
   const code = Number(json.error);
@@ -370,6 +394,8 @@ async function attempt({ kind, variables, force }) {
     err.retryable = 'refresh';
     throw err;
   }
+  const limited = rateLimitFrom(json);
+  if (limited) throw limited;
   const rejection = upstreamRejection(json);
   if (rejection) throw rejection;
   if (json && Array.isArray(json.errors) && json.errors.length && !json.data) {
@@ -421,7 +447,7 @@ async function requestSearchFirstPage(variables) {
 // Signals that Meta is pushing back (as opposed to a deterministic, coded rejection of one cursor).
 function isPressureSignal(err) {
   return err instanceof UpstreamBlockedError && !err.metaErrorCode
-    && /429|empty payload|Initial search GET failed|Could not extract initial search data|Network request to Facebook failed|HTTP 5\d\d/.test(err.message || '');
+    && /429|rate limit|empty payload|Initial search GET failed|Could not extract initial search data|Network request to Facebook failed|HTTP 5\d\d/.test(err.message || '');
 }
 
 async function requestRaw({ kind, variables }) {
@@ -436,16 +462,17 @@ async function request(args) {
     limiter.reward();
     return data;
   } catch (err) {
-    if (isPressureSignal(err) && err.retryable !== 'backoff') limiter.penalize(err.message); // 'backoff' ones were counted in the retry loop
+    if (isPressureSignal(err) && err.retryable !== 'backoff' && err.retryable !== 'ratelimit') limiter.penalize(err.message); // 'backoff' ones were counted in the retry loop
     throw err;
   }
 }
 
 async function requestWithRetries({ kind, variables }) {
   let refreshed = false;
+  let rateLimitHits = 0;
   let lastErr;
 
-  for (let i = 0; i <= config.maxRetries; i += 1) {
+  for (let i = 0; i <= config.maxRetries + config.rateLimitRetries; i += 1) {
     try {
       return await attempt({ kind, variables, force: refreshed && i === 0 ? false : refreshed });
     } catch (err) {
@@ -457,6 +484,17 @@ async function requestWithRetries({ kind, variables }) {
         continue; // immediate retry with a fresh session
       }
 
+      if (err.retryable === 'ratelimit') {
+        const event = limiter.rateLimited(err.message);
+        rateEvents.record(event);
+        console.warn(`[graphql] Meta rate limit (${event.requests_10m} requests in the last 10 min, ${event.requests_60m} in 60): cooling down ${Math.round(event.cooldown_ms / 60000)} min`);
+        rateLimitHits += 1;
+        if (rateLimitHits > config.rateLimitRetries) {
+          err.message = `Meta rate limit exceeded; gave up after ${rateLimitHits} cool-down(s). Wait and try again later.`;
+          throw err;
+        }
+        continue; // the limiter holds the next request until the cool-down ends
+      }
       if (err.retryable === 'backoff') limiter.penalize(err.message);
       if (err.retryable === 'backoff' && i < config.maxRetries) {
         const base = config.backoffBaseMs * 2 ** i;
@@ -480,6 +518,8 @@ function pseudoRandom(i) {
 
 module.exports = {
   getPacing: () => limiter.stats(),
+  rateLimitFrom,
+  isRateLimitText,
   isPressureSignal,
   request,
   parseResponse,

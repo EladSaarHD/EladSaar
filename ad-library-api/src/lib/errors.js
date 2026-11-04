@@ -44,8 +44,20 @@ class UpstreamBlockedError extends ApiError {
   }
 }
 
+// Meta told us to slow down ("Rate limit exceeded"). Distinct from a generic block: it is temporary, the
+// right response is a long cool-down (minutes), and hammering on makes it worse.
+class RateLimitedError extends UpstreamBlockedError {
+  constructor(message = 'Meta rate limit exceeded') {
+    super(message);
+    this.status = 429;
+    this.code = 'rate_limited';
+    this.retryable = 'ratelimit';
+  }
+}
+
 module.exports = {
   ApiError,
+  RateLimitedError,
   InvalidParamsError,
   UnauthorizedError,
   NotFoundError,

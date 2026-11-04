@@ -50,6 +50,11 @@ const config = {
   fastestRequestDelayMs: num(fileConfig.fastestRequestDelayMs, env.FASTEST_REQUEST_DELAY_MS, num(fileConfig.minRequestDelayMs, env.MIN_REQUEST_DELAY_MS, 2000)),
   // Hard ceiling per upstream request (headers + body). A healthy request takes ~1.3 s (p95 2.3 s).
   requestTimeoutMs: num(fileConfig.requestTimeoutMs, env.REQUEST_TIMEOUT_MS, 30000),
+  // How many cool-downs (5, then 15 min) a single request will wait out after Meta says "Rate limit exceeded".
+  rateLimitRetries: num(fileConfig.rateLimitRetries, env.RATE_LIMIT_RETRIES, 2),
+  // Soft rolling budget of upstream requests per hour (0 = unlimited). A 16-minute sustained burst of ~490 requests
+  // (0.65/s) was rate-limited by Meta on 2026-11-04; 900/h keeps heavy scans from stacking into that pattern.
+  maxRequestsPerHour: num(fileConfig.maxRequestsPerHour, env.MAX_REQUESTS_PER_HOUR, 900),
   maxRetries: num(fileConfig.maxRetries, env.MAX_RETRIES, 3),
   backoffBaseMs: num(fileConfig.backoffBaseMs, env.BACKOFF_BASE_MS, 5000),
   sessionTtlSeconds: num(fileConfig.sessionTtlSeconds, env.SESSION_TTL_SECONDS, 1800),

@@ -62,3 +62,34 @@ test('old penalties age out of the escalation window', () => {
   l.penalize('x', 5000);
   assert.strictEqual(l.cooldownUntil, 5000 + 1000, 'the first signal expired, so the cool-down did not escalate');
 });
+
+test('a Meta rate limit means a long cool-down, a slower pace, no speed-up for 2 h, and a loggable event', () => {
+  const l = make({ floorMs: 1000 });
+  const now = Date.now();
+  for (let i = 0; i < 20; i += 1) l._onStart(now - i * 1000);
+  const first = l.rateLimited('Rate limit exceeded', now);
+  assert.strictEqual(first.cooldown_ms, 300000, '5 minutes the first time');
+  assert.strictEqual(l.cooldownUntil, now + 300000);
+  assert.ok(l.minDelayMs >= 4000, `pace at least doubles the baseline (got ${l.minDelayMs})`);
+  assert.strictEqual(first.requests_10m, 20, 'the load just before the hit is recorded');
+  // clean requests right after must NOT creep the pace back down during the hold
+  const before = l.minDelayMs;
+  for (let i = 0; i < 100; i += 1) l.reward();
+  assert.strictEqual(l.minDelayMs, before, 'held: no speed-up for 2 hours');
+  assert.strictEqual(l.rateLimited('again', now + 60000).cooldown_ms, 900000, '15 minutes the second time');
+  assert.strictEqual(l.rateLimited('again', now + 120000).cooldown_ms, 1800000, '30 minutes from the third');
+  assert.strictEqual(l.rateLimited('again', now + 180000).cooldown_ms, 1800000, 'capped at 30 minutes');
+  assert.ok(l.minDelayMs <= l.ceilingMs);
+});
+
+test('the hourly budget delays the next request until the oldest one ages out; 0 means unlimited', () => {
+  const l = make({ maxPerHour: 5 });
+  const now = Date.now();
+  for (let i = 0; i < 4; i += 1) l._onStart(now - 600000 + i); // 4 requests, 10 min ago
+  assert.strictEqual(l._budgetWait(now), 0, 'under budget');
+  l._onStart(now - 1000); // 5th
+  const wait = l._budgetWait(now);
+  assert.ok(wait > 49 * 60000 && wait <= 50 * 60000, `waits for the oldest to leave the hour (${Math.round(wait / 60000)} min)`);
+  assert.strictEqual(make({ maxPerHour: 0 })._budgetWait(now), 0);
+  assert.strictEqual(l.stats().max_per_hour, 5);
+});

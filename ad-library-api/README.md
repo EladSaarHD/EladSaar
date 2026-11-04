@@ -128,6 +128,21 @@ a queued job reports `queue_position` and survives a restart. An identical reque
 order…) that is still queued/running returns the existing job with `attached_to_existing: true`, so a client that lost its
 connection can safely ask again. Pass `"queue": false` for the strict "409 while busy" behaviour.
 
+**Speed, pacing and safety.** Requests are spaced by an adaptive limiter: it starts at `MIN_REQUEST_DELAY_MS` and only
+creeps down (x0.85 after 25 clean requests in a row) toward `FASTEST_REQUEST_DELAY_MS`; any 429 / 5xx / empty payload /
+blocked first page / dropped connection snaps it back to at least the baseline, doubles it, and pauses (30 s, doubling for
+repeats, max 5 min). Live state: `GET /api/health` -> `pacing`. Every upstream request has a hard timeout
+(`REQUEST_TIMEOUT_MS`, default 30 s) and a connection dropped while reading a response is retried like any network fault.
+One query's pages form a chain, so a single scan cannot go faster than ~1/latency (~0.75 requests/s, ~7 ads/s).
+
+**Big scans.** `targetAds` up to 10,000. Up to 1,000 the page budget is fixed (predictable daily runs); above 1,000 the budget
+follows the scan's real yield (a windowed scan in impression order discards ads that launched before the window, so it
+needs more pages than the target suggests), capped at 1,100 pages per shard. In `Newest first` order a windowed scan stops
+as soon as it pages past the window.
+
+**Storage.** Each distinct ad is stored once, compressed, in `ad_payloads`; scan rows are small. See
+`scripts/migrate-payloads.js` (one-time migration of old databases) and `docs/audit-2026-11-04.md`.
+
 **Query syntax.** `|`, commas and new lines separate terms (OR — each term is its own search).
 A term wrapped in **double quotes is an exact phrase** (Meta `keyword_exact_phrase`); commas inside
 quotes do not split it. Unquoted terms are keyword searches. Pass `"exactPhrase": false` to ignore quotes.

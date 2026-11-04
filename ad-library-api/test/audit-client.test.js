@@ -275,3 +275,17 @@ test('collectShardPages accepts a budget function', async () => {
   assert.strictEqual(result.pages, 7);
 });
 
+
+test('Meta rate-limit responses are recognised (message or code) and are not mistaken for ordinary rejections', () => {
+  const { RateLimitedError } = require('../src/lib/errors');
+  const byMessage = client.rateLimitFrom({ errors: [{ message: 'Rate limit exceeded' }] });
+  assert.ok(byMessage instanceof RateLimitedError);
+  assert.strictEqual(byMessage.retryable, 'ratelimit');
+  assert.strictEqual(byMessage.status, 429);
+  assert.ok(client.rateLimitFrom({ error: 613, errorSummary: 'Calls to this api have exceeded the rate limit' }) instanceof RateLimitedError);
+  assert.ok(client.rateLimitFrom({ error: 4 }) instanceof RateLimitedError);
+  assert.strictEqual(client.rateLimitFrom({ error: 1357054, errorSummary: 'x' }), null, 'a header problem is not a rate limit');
+  assert.strictEqual(client.rateLimitFrom({ errors: [{ message: 'Something else' }] }), null);
+  assert.strictEqual(client.rateLimitFrom({ data: { ok: 1 }, errors: [{ message: 'Rate limit exceeded' }] }), null, 'real data wins');
+  assert.strictEqual(client.isPressureSignal(new RateLimitedError()), true);
+});

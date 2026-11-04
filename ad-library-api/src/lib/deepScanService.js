@@ -11,6 +11,7 @@ const {
   scoreMomentum, scoreScale,
 } = require('./deepScan');
 const payloadStore = require('./payloadStore');
+const { getPacing } = require('./graphqlClient');
 const registry = require('./registry');
 
 const createJobStmt = db.prepare(`INSERT INTO scan_jobs
@@ -86,6 +87,10 @@ function parseJob(row) {
     completed_shards: row.completed_shards, unique_ads: row.unique_ads, discarded_ads: row.discarded_ads || 0,
     error: row.error, progress: scanProgress(row, config),
     created_at: row.created_at, updated_at: row.updated_at };
+  if (row.status === 'running') {
+    const pacing = getPacing();
+    if (pacing.cooling_down_ms > 0) job.paused_ms = pacing.cooling_down_ms; // waiting out a Meta rate limit
+  }
   // Scans ahead of this one (a running scan counts); 0 when it is next / running.
   if (row.status === 'queued' && row.shards_json) job.queue_position = aheadStmt.get({ id: row.id, created: row.created_at }).n;
   return job;
@@ -149,6 +154,8 @@ async function runScan(id, shards, config) {
   let discarded = 0;
   let skipped = 0;
   let continuationFailures = 0;
+  let continuationReason = null;
+  let continuationAtPage = null;
   let earlyStops = 0;
   let noveltyStops = 0;
   let lastError = null;
@@ -227,7 +234,12 @@ async function runScan(id, shards, config) {
           pause: () => sleep(config.pagePauseMs ?? 0),
           shouldStop: stopCheck,
         });
-        if (result.pageError) continuationFailures += 1;
+        if (result.pageError) {
+          continuationFailures += 1;
+          continuationReason = continuationReason || String(result.pageError.message || result.pageError).slice(0, 140);
+          continuationAtPage = continuationAtPage || result.pages;
+          console.warn(`[scan ${id.slice(0, 8)}] chain for "${label}" stopped after ${result.pages} page(s): ${continuationReason}`);
+        }
       } catch (error) {
         skipped += 1;
         lastError = error;
@@ -236,7 +248,7 @@ async function runScan(id, shards, config) {
       const unique = countUnique();
       const warnings = [];
       if (skipped) warnings.push(`${skipped} shard(s) skipped after bounded retries${lastError ? `: ${String(lastError.message || lastError).slice(0, 160)}` : ''}`);
-      if (continuationFailures) warnings.push(`${continuationFailures} continuation cursor(s) failed mid-pagination; ads collected before the failure were preserved`);
+      if (continuationFailures) warnings.push(`${continuationFailures} continuation cursor(s) failed mid-pagination (after ${continuationAtPage} page(s): ${continuationReason}); ads collected before the failure were preserved`);
       if (discarded) warnings.push(`Discarded ${discarded} out-of-window ad(s) with missing, invalid, or non-matching start_date`);
       if (discarded > unique * 2 && config.sort !== 'recent' && !(config.pageIds || []).length) {
         warnings.push(`${Math.round((discarded / (discarded + unique)) * 100)}% of the ads fetched launched before the ${config.lookbackDays}-day window; choose "Newest first" to reach in-window ads several times faster`);
@@ -248,12 +260,14 @@ async function runScan(id, shards, config) {
     const unique = countUnique();
     const notes = [];
     if (skipped) notes.push(`${skipped} shard(s) skipped after bounded retries; collected results remain usable`);
-    if (continuationFailures) notes.push(`${continuationFailures} continuation cursor(s) failed mid-pagination; ads collected before the failure were preserved`);
+    if (continuationFailures) notes.push(`${continuationFailures} continuation cursor(s) failed mid-pagination (after ${continuationAtPage} page(s): ${continuationReason}); ads collected before the failure were preserved`);
     if (earlyStops) notes.push(`${earlyStops} shard(s) stopped early after paging past the ${config.lookbackDays}-day launch window`);
     if (noveltyStops) notes.push(`${noveltyStops} expansion shard(s) stopped early because they only returned ads already collected`);
     if (discarded) notes.push(`Discarded ${discarded} out-of-window ad(s) with missing, invalid, or non-matching start_date.`);
     if (unique < config.targetAds) {
-      notes.push(`Collected ${unique} unique ads of the ${config.targetAds} target. The selected countries, filters and ${config.lookbackDays}-day launch window were exhausted; no duplicate or invented ads were added.`);
+      notes.push(continuationFailures
+        ? `Collected ${unique} unique ads of the ${config.targetAds} target. Collection stopped early because Meta ended a result chain (see above), so more matching ads may exist: split the search (different terms, countries or a shorter window) to reach them. No duplicate or invented ads were added.`
+        : `Collected ${unique} unique ads of the ${config.targetAds} target. The selected countries, filters and ${config.lookbackDays}-day launch window were exhausted; no duplicate or invented ads were added.`);
     }
     updateProgressStmt.run({ id, status: 'complete', completed, discarded, error: notes.join(' ') || null, now: Date.now() });
   } catch (error) {
