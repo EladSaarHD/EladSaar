@@ -13,8 +13,16 @@ const {
 const registry = require('./registry');
 
 const createJobStmt = db.prepare(`INSERT INTO scan_jobs
-  (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at)
-  VALUES (@id,'queued',@config_json,@total_shards,0,0,0,@now,@now)`);
+  (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at,shards_json,request_hash)
+  VALUES (@id,'queued',@config_json,@total_shards,0,0,0,@now,@now,@shards_json,@request_hash)`);
+// Only queue rows that carry a shard plan (jobs inserted by older code or by tests that call runScan
+// directly have none and are never picked up).
+const getQueuedStmt = db.prepare("SELECT * FROM scan_jobs WHERE status='queued' AND shards_json IS NOT NULL ORDER BY created_at ASC, rowid ASC LIMIT 1");
+const findDuplicateStmt = db.prepare("SELECT * FROM scan_jobs WHERE request_hash=? AND status IN ('queued','running') ORDER BY created_at ASC LIMIT 1");
+const queueDepthStmt = db.prepare("SELECT COUNT(*) AS n FROM scan_jobs WHERE status IN ('queued','running') AND shards_json IS NOT NULL");
+const aheadStmt = db.prepare(`SELECT COUNT(*) AS n FROM scan_jobs WHERE status IN ('queued','running') AND shards_json IS NOT NULL
+  AND (created_at < @created OR (created_at = @created AND rowid < (SELECT rowid FROM scan_jobs WHERE id=@id)))`);
+const MAX_QUEUE = 25;
 const getJobStmt = db.prepare('SELECT * FROM scan_jobs WHERE id = ?');
 const updateProgressStmt = db.prepare(`UPDATE scan_jobs SET status=@status, completed_shards=@completed,
   unique_ads=(SELECT COUNT(*) FROM scan_ads WHERE scan_id=@id), discarded_ads=@discarded,
@@ -43,9 +51,10 @@ const upsertAdStmt = db.prepare(`INSERT INTO scan_ads
 
 // Scan workers live in this Node process. A queued/running row found at boot
 // was interrupted and must not block future scans indefinitely.
+// (Queued scans that already have a shard plan are kept and resumed by pump() below.)
 db.prepare(`UPDATE scan_jobs SET status='failed',
   error=COALESCE(error || ' ', '') || 'Interrupted by service restart; collected results remain available.',
-  updated_at=? WHERE status IN ('queued','running')`).run(Date.now());
+  updated_at=? WHERE status='running' OR (status='queued' AND shards_json IS NULL)`).run(Date.now());
 
 // Progress: finished scans are 100%. While running, take the larger of shard progress and
 // collected/target, capped at 99 — a one-shard scan that has gathered 600 of 1,000 ads is 60%
@@ -61,10 +70,13 @@ function scanProgress(row, config) {
 function parseJob(row) {
   if (!row) return null;
   const config = JSON.parse(row.config_json);
-  return { id: row.id, status: row.status, config, total_shards: row.total_shards,
+  const job = { id: row.id, status: row.status, config, total_shards: row.total_shards,
     completed_shards: row.completed_shards, unique_ads: row.unique_ads, discarded_ads: row.discarded_ads || 0,
     error: row.error, progress: scanProgress(row, config),
     created_at: row.created_at, updated_at: row.updated_at };
+  // Scans ahead of this one (a running scan counts); 0 when it is next / running.
+  if (row.status === 'queued' && row.shards_json) job.queue_position = aheadStmt.get({ id: row.id, created: row.created_at }).n;
+  return job;
 }
 
 function getJob(id) { return parseJob(getJobStmt.get(id)); }
@@ -225,7 +237,8 @@ async function runScan(id, shards, config) {
 }
 
 function createScan(input) {
-  const active = parseJob(getActiveJobStmt.get());
+  // Default: queue behind a running scan. `queue: false` restores the strict "409 while busy" behaviour.
+  const active = input.queue === false ? parseJob(getActiveJobStmt.get()) : null;
   if (active) {
     const error = new Error(`Scan ${active.id} is already ${active.status}`);
     error.code = 'scan_active';
@@ -261,10 +274,47 @@ function createScan(input) {
     mediaType: input.mediaType || 'all', platform: input.platform || null };
   const shards = buildScanShards({ queries: plan, countries, lookbackDays,
     windowDays: lookbackDays, maxShards });
+  // Idempotency: an identical request that is still queued/running IS that job. A client that lost its
+  // connection mid-scan (fetch failed) can simply ask again and re-attach instead of colliding with it.
+  const requestHash = crypto.createHash('sha1').update(JSON.stringify({
+    plan: plan.map((entry) => [entry.query, entry.searchType, entry.pageId || null, entry.origin || 'seed']),
+    countries, targetAds, lookbackDays, sort, mode, activeStatus: config.activeStatus, mediaType: config.mediaType, platform: config.platform,
+  })).digest('hex');
+  const duplicate = findDuplicateStmt.get(requestHash);
+  if (duplicate) return { ...parseJob(duplicate), attached_to_existing: true };
+  if (queueDepthStmt.get().n >= MAX_QUEUE) {
+    const error = new Error(`Scan queue is full (${MAX_QUEUE}); wait for running scans to finish`);
+    error.code = 'queue_full';
+    error.status = 429;
+    throw error;
+  }
   const id = crypto.randomUUID(); const now = Date.now();
-  createJobStmt.run({ id, config_json: JSON.stringify(config), total_shards: shards.length, now });
-  setImmediate(() => runScan(id, shards, config));
+  createJobStmt.run({ id, config_json: JSON.stringify(config), total_shards: shards.length, now,
+    shards_json: JSON.stringify(shards), request_hash: requestHash });
+  setImmediate(pump);
   return getJob(id);
+}
+
+// Single worker: scans run one at a time (Meta politeness), FIFO. A finished/failed scan hands over to
+// the next queued one; queued scans survive a restart.
+let worker = null;
+function pump() {
+  if (worker) return;
+  const row = getQueuedStmt.get();
+  if (!row) return;
+  let shards;
+  let config;
+  try {
+    shards = JSON.parse(row.shards_json);
+    config = JSON.parse(row.config_json);
+  } catch (error) {
+    updateProgressStmt.run({ id: row.id, status: 'failed', completed: 0, discarded: 0, error: 'Unreadable queued scan plan', now: Date.now() });
+    setImmediate(pump);
+    return;
+  }
+  worker = runScan(row.id, shards, config)
+    .catch(() => {})
+    .finally(() => { worker = null; setImmediate(pump); });
 }
 
 function seedSet(id) {
@@ -349,4 +399,4 @@ function latestScans(limit = 10) {
   return db.prepare('SELECT * FROM scan_jobs ORDER BY created_at DESC LIMIT ?').all(Math.min(Number(limit) || 10, 50)).map(parseJob);
 }
 
-module.exports = { createScan, getJob, listAds, listStores, latestScans, runScan, createNoveltyStop };
+module.exports = { createScan, getJob, listAds, listStores, latestScans, runScan, createNoveltyStop, pump };

@@ -123,6 +123,11 @@ matching ads exist. Returned ads are revalidated locally against each shard's in
 before persistence; missing, invalid, or out-of-window `start_date` values are excluded and counted
 in the job's `discarded_ads` field.
 
+**Queueing and retries.** Scans run one at a time (Meta politeness) but are **queued FIFO** (max 25) instead of rejected;
+a queued job reports `queue_position` and survives a restart. An identical request (same terms, countries, window, target,
+order…) that is still queued/running returns the existing job with `attached_to_existing: true`, so a client that lost its
+connection can safely ask again. Pass `"queue": false` for the strict "409 while busy" behaviour.
+
 **Query syntax.** `|`, commas and new lines separate terms (OR — each term is its own search).
 A term wrapped in **double quotes is an exact phrase** (Meta `keyword_exact_phrase`); commas inside
 quotes do not split it. Unquoted terms are keyword searches. Pass `"exactPhrase": false` to ignore quotes.

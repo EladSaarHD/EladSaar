@@ -341,6 +341,55 @@ test('digest lists new launches from the user\'s own terms, new stores and adver
   assert.match(text, /facebook\.com\/ads\/library\/\?id=/);
 });
 
+
+test('a second scan queues behind the running one (no 409); identical requests attach to the live job', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  script = async (params, variables) => {
+    await gate;
+    return { ads: [makeAd(`QUEUE-${variables.queryString.length}-${variables.queryString.charCodeAt(6)}`)], page_info: { has_next_page: false, end_cursor: null }, count: 1 };
+  };
+  const a = service.createScan({ queries: 'queue alpha', lookbackDays: 30, targetAds: 30 });
+  const b = service.createScan({ queries: 'queue beta', lookbackDays: 30, targetAds: 30 });
+  assert.strictEqual(b.status, 'queued');
+  assert.ok(b.queue_position >= 1, 'something is ahead of it');
+  const again = service.createScan({ queries: 'queue beta', lookbackDays: 30, targetAds: 30 });
+  assert.strictEqual(again.id, b.id, 'identical request re-attaches to the same job');
+  assert.strictEqual(again.attached_to_existing, true);
+  assert.throws(() => service.createScan({ queries: 'queue gamma', lookbackDays: 30, queue: false }), /already/);
+  release();
+  for (let i = 0; i < 300 && !['complete', 'failed'].includes(service.getJob(b.id).status); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const ja = service.getJob(a.id);
+  const jb = service.getJob(b.id);
+  assert.strictEqual(ja.status, 'complete');
+  assert.strictEqual(jb.status, 'complete');
+  assert.ok(jb.updated_at >= ja.updated_at, 'FIFO: the later request finished after the earlier one');
+  // once finished, the same request starts a NEW scan (attach only applies to live jobs)
+  script = () => ({ ads: [], page_info: { has_next_page: false, end_cursor: null }, count: 0 });
+  const rerun = service.createScan({ queries: 'queue beta', lookbackDays: 30, targetAds: 30 });
+  assert.notStrictEqual(rerun.id, b.id);
+  for (let i = 0; i < 200 && !['complete', 'failed'].includes(service.getJob(rerun.id).status); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+});
+
+test('queued scans with a stored plan are resumed by pump() (restart safety)', async () => {
+  script = () => ({ ads: [makeAd('RESUME-1')], page_info: { has_next_page: false, end_cursor: null }, count: 1 });
+  const config = { mode: 'deep', queries: ['resume me'], targetAds: 30, lookbackDays: 30, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  db.prepare(`INSERT INTO scan_jobs (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at,shards_json,request_hash)
+    VALUES (?, 'queued', ?, 1, 0, 0, 0, ?, ?, ?, ?)`).run(id, JSON.stringify(config), now, now, JSON.stringify([{ ...SHARD, query: 'resume me' }]), 'resume-hash');
+  service.pump();
+  for (let i = 0; i < 200 && service.getJob(id).status !== 'complete'; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.strictEqual(service.getJob(id).status, 'complete');
+  assert.strictEqual(service.getJob(id).unique_ads, 1);
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });

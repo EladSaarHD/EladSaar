@@ -14,6 +14,7 @@ const adsRouter = require('./routes/ads');
 const scansRouter = require('./routes/scans');
 const registryRouter = require('./routes/registry');
 const { startCanarySchedule } = require('./lib/canary');
+const { pump: resumeQueuedScans } = require('./lib/deepScanService');
 
 // A scraping error must never take down the server — log and keep serving.
 process.on('uncaughtException', (err) => {
@@ -54,6 +55,7 @@ app.use(errorHandler);
 
 // Bind to localhost only — this is a private, single-user tool.
 const server = app.listen(config.port, config.bindHost, () => {
+  resumeQueuedScans(); // pick up scans that were queued when the service last stopped
   console.log(`\n  Ad Library API → http://${config.bindHost}:${config.port}`);
   console.log(`  Data dir:  ${config.dataDir}`);
   console.log(`  Auth:      ${config.apiKey ? 'X-API-Key required' : 'open (no API key set)'}`);

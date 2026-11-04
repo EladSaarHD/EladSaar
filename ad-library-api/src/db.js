@@ -68,6 +68,13 @@ if (!scanJobColumns.has('discarded_ads')) {
   db.exec('ALTER TABLE scan_jobs ADD COLUMN discarded_ads INTEGER NOT NULL DEFAULT 0');
 }
 
+// Scan queue: the shard plan is persisted so queued scans survive a restart, and request_hash lets an
+// identical request (e.g. a client retrying after a dropped connection) attach to the live job.
+for (const [name, ddl] of [['shards_json', 'TEXT'], ['request_hash', 'TEXT']]) {
+  if (!scanJobColumns.has(name)) db.exec(`ALTER TABLE scan_jobs ADD COLUMN ${name} ${ddl}`);
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_scan_jobs_hash ON scan_jobs(request_hash, status)');
+
 // Additive migrations (metadata-only ALTERs: instant even on a multi-GB file, and old code that
 // names its columns explicitly keeps working, so a rollback is safe).
 const scanAdColumns = new Set(db.pragma('table_info(scan_ads)').map((column) => column.name));
