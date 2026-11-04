@@ -11,7 +11,8 @@ function errorHandler(err, req, res, next) {
     if (err.status >= 500) {
       console.error(`[${err.code}] ${err.message}`);
     }
-    return res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    if (err.retryAfterMs > 0) res.set('Retry-After', String(Math.ceil(err.retryAfterMs / 1000)));
+    return res.status(err.status).json({ error: { code: err.code, message: err.message, ...(err.retryAfterMs > 0 ? { retry_after_seconds: Math.ceil(err.retryAfterMs / 1000) } : {}) } });
   }
 
   console.error('[internal_error]', err && err.stack ? err.stack : err);

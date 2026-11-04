@@ -305,3 +305,15 @@ test('createKnownAdsStop stops after consecutive mostly-known pages, never befor
   assert.strictEqual(mixed(allKnown), false);
   assert.strictEqual(mixed(allKnown), true);
 });
+
+test('interactive requests fail fast during a Meta cool-down (with Retry-After); patient (scan) requests are not short-circuited', async () => {
+  const { RateLimitedError } = require('../src/lib/errors');
+  const { limiter } = client;
+  const saved = limiter.cooldownUntil;
+  try {
+    limiter.cooldownUntil = Date.now() + 10 * 60000;
+    const started = Date.now();
+    await assert.rejects(client.request({ kind: 'search', variables: { queryString: 'x' } }), (err) => err instanceof RateLimitedError && err.retryAfterMs > 9 * 60000 && /try again in about 10 min/.test(err.message));
+    assert.ok(Date.now() - started < 500, 'no waiting, no network');
+  } finally { limiter.cooldownUntil = saved; }
+});

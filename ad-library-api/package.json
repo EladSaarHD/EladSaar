@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test test/*.test.js",
+    "test": "DATA_DIR=\"${TMPDIR:-/tmp}/adsignal-test-$$\" node --test test/*.test.js",
     "test:ui": "npm --prefix web test",
     "build:ui": "npm --prefix web run build",
     "smoke": "node scripts/smoke.js"

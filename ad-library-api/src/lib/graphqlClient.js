@@ -431,17 +431,17 @@ function shouldFallbackToPost(err) {
     && /Initial search GET failed|Could not extract initial search data|Network request to Facebook failed/.test(err.message || '');
 }
 
-async function searchFirstPageViaPost(variables) {
-  return requestWithRetries({ kind: 'search', variables: { ...variables, cursor: null, continuationStateID: null } });
+async function searchFirstPageViaPost(variables, patient = false) {
+  return requestWithRetries({ kind: 'search', variables: { ...variables, cursor: null, continuationStateID: null }, patient });
 }
 
-async function requestSearchFirstPage(variables) {
+async function requestSearchFirstPage(variables, patient = false) {
   try {
     return await requestInitialSearch(variables);
   } catch (err) {
     if (!shouldFallbackToPost(err)) throw err;
     console.warn(`[graphql] first-page HTML failed (${err.message}); falling back to GraphQL POST`);
-    return searchFirstPageViaPost(variables);
+    return searchFirstPageViaPost(variables, patient);
   }
 }
 
@@ -451,13 +451,28 @@ function isPressureSignal(err) {
     && /429|rate limit|empty payload|Initial search GET failed|Could not extract initial search data|Network request to Facebook failed|HTTP 5\d\d/.test(err.message || '');
 }
 
-async function requestRaw({ kind, variables }) {
-  if (kind === 'search' && !variables.cursor) return requestSearchFirstPage(variables);
+async function requestRaw({ kind, variables, patient = false }) {
+  if (kind === 'search' && !variables.cursor) return requestSearchFirstPage(variables, patient);
   if (kind === 'details') return requestInitialDetails(variables);
-  return requestWithRetries({ kind, variables });
+  return requestWithRetries({ kind, variables, patient });
+}
+
+// Interactive callers must not hang for minutes behind a Meta cool-down: tell them how long to wait and stop.
+function failFastIfCooling() {
+  const cooling = limiter.stats().cooling_down_ms;
+  if (cooling > 0) {
+    const err = new RateLimitedError(`Meta is rate-limiting this connection; try again in about ${Math.max(1, Math.round(cooling / 60000))} min`);
+    err.retryAfterMs = cooling;
+    return err;
+  }
+  return null;
 }
 
 async function request(args) {
+  if (!args.patient) {
+    const blocked = failFastIfCooling();
+    if (blocked) throw blocked;
+  }
   try {
     const data = await requestRaw(args);
     limiter.reward();
@@ -468,7 +483,7 @@ async function request(args) {
   }
 }
 
-async function requestWithRetries({ kind, variables }) {
+async function requestWithRetries({ kind, variables, patient = false }) {
   let refreshed = false;
   let rateLimitHits = 0;
   let lastErr;
@@ -490,7 +505,9 @@ async function requestWithRetries({ kind, variables }) {
         rateEvents.record(event);
         console.warn(`[graphql] Meta rate limit (${event.requests_10m} requests in the last 10 min, ${event.requests_60m} in 60): cooling down ${Math.round(event.cooldown_ms / 60000)} min`);
         rateLimitHits += 1;
-        if (rateLimitHits > config.rateLimitRetries) {
+        // Only background scans wait out the cool-down; everyone else gets the error straight away.
+        if (rateLimitHits > (patient ? config.rateLimitRetries : 0)) {
+          err.retryAfterMs = limiter.stats().cooling_down_ms;
           err.message = `Meta rate limit exceeded; gave up after ${rateLimitHits} cool-down(s). Wait and try again later.`;
           throw err;
         }
@@ -519,6 +536,7 @@ function pseudoRandom(i) {
 
 module.exports = {
   getPacing: () => limiter.stats(),
+  limiter,
   rateLimitFrom,
   isRateLimitText,
   isPressureSignal,

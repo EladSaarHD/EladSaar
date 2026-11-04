@@ -16,7 +16,8 @@ async function runListQuery({ cacheKind, cacheParams, variables, fresh }) {
     if (hit) return { ...hit, cached: true };
   }
 
-  const data = await client.request({ kind: 'search', variables });
+  // Background scans wait out a Meta cool-down; interactive callers (UI search, Hunter's quick `search`) fail fast.
+  const data = await client.request({ kind: 'search', variables, patient: cacheKind === 'deep-scan' });
   const norm = normalizeSearchResponse(data);
 
   const payload = {
