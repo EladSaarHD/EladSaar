@@ -118,6 +118,26 @@ function normalizeTransparency(node) {
   };
 }
 
+function toNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Lists such as extra_texts / extra_links arrive as strings or small objects.
+function normalizeStringList(list, keys = ['text', 'url', 'link_url']) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') {
+        for (const key of keys) if (typeof item[key] === 'string' && item[key]) return item[key];
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
 // Map one raw ad node (a collated_results[i] or details `ad` object) to the
 // stable output schema.
 function normalizeAd(node, extra = {}) {
@@ -134,11 +154,27 @@ function normalizeAd(node, extra = {}) {
     page_name: nonEmpty(n.page_name) || null,
     page_profile_url: nonEmpty(snap.page_profile_uri) || null,
     page_profile_picture_url: nonEmpty(snap.page_profile_picture_url) || null,
+    // Advertiser size/category context Meta already ships with every ad.
+    page_like_count: toNumberOrNull(snap.page_like_count),
+    page_categories: Array.isArray(snap.page_categories) ? snap.page_categories : [],
+    page_is_deleted: n.page_is_deleted === undefined ? null : Boolean(n.page_is_deleted),
     is_active: n.is_active === undefined ? null : Boolean(n.is_active),
     start_date: unixToDate(n.start_date),
     end_date: unixToDate(n.end_date),
+    total_active_time: toNumberOrNull(n.total_active_time),
     publisher_platforms: Array.isArray(n.publisher_platform) ? n.publisher_platform : [],
     display_format: nonEmpty(snap.display_format) || null,
+    // Meta returns ONE representative per group of ads that share a creative; the group
+    // size is `collation_count` ("N ads use this creative and text" in the UI). It is the
+    // single best free scale signal: many variants of one creative = budget being spread.
+    collation_id: n.collation_id != null ? String(n.collation_id) : null,
+    collation_count: toNumberOrNull(n.collation_count),
+    ad_library_url: n.ad_archive_id != null ? `https://www.facebook.com/ads/library/?id=${n.ad_archive_id}` : null,
+    ai_generated: n.contains_digital_created_media === undefined ? null : Boolean(n.contains_digital_created_media),
+    gated_type: nonEmpty(n.gated_type) || null,
+    report_count: toNumberOrNull(n.report_count),
+    has_user_reported: n.has_user_reported === undefined ? null : Boolean(n.has_user_reported),
+    targeted_or_reached_countries: Array.isArray(n.targeted_or_reached_countries) ? n.targeted_or_reached_countries : [],
     creative: {
       title: nonEmpty(snap.title) || null,
       body: nonEmpty(body) || null,
@@ -147,6 +183,11 @@ function normalizeAd(node, extra = {}) {
       cta_text: nonEmpty(snap.cta_text) || null,
       cta_type: nonEmpty(snap.cta_type) || null,
       link_url: nonEmpty(snap.link_url) || null,
+      link_description: nonEmpty(snap.link_description) || null,
+      extra_texts: normalizeStringList(snap.extra_texts),
+      extra_links: normalizeStringList(snap.extra_links),
+      disclaimer_label: nonEmpty(snap.disclaimer_label) || null,
+      is_reshared: snap.is_reshared === undefined ? null : Boolean(snap.is_reshared),
       images: normalizeImages(snap.images),
       videos: normalizeVideos(snap.videos),
       cards: normalizeCards(snap.cards),

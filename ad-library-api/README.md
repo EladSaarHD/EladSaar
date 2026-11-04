@@ -98,40 +98,77 @@ improves the lookup.
 curl "http://127.0.0.1:4100/api/ads/1234567890123456?page_id=20531316728&country=US"
 ```
 
-### `GET /api/health`
+### `GET /api/health` and `GET /api/health/deep`
 
-Liveness plus session/cache introspection. Never makes a live call to Facebook.
+`/api/health` is liveness plus session/cache introspection and the last canary result
+(`canary`, `degraded`). It never calls Facebook.
+
+`/api/health/deep` runs the **live canary**: a first page *and* a continuation page. (A canary that
+only fetches page one cannot see broken pagination — see Maintenance.) Returns `503` with the reason
+when it fails; results are reused for 60 s. The service also runs it on boot and every
+`CANARY_INTERVAL_HOURS` (default 6; `0` disables).
 
 ```bash
 curl "http://127.0.0.1:4100/api/health"
+curl "http://127.0.0.1:4100/api/health/deep"
 ```
 
 ### Background deep scans
 
-`POST /api/scans` starts a local background collection job. Scans expand queries across
-the selected countries, follow Meta continuation cursors, deduplicate by
-`ad_archive_id`, and stop when the target is reached or the public result pool is
-exhausted. The target is a goal, not a promise that matching ads exist. Returned ads are
-revalidated locally against each shard's inclusive launch window before persistence;
-missing, invalid, or out-of-window `start_date` values are excluded and counted in the
-job's `discarded_ads` field. Query expressions accept pipes, commas, or new lines as
-OR separators; wrapping single or double quotes are removed, so
-`"% off" | "Worldwide Shipping"` and `% off | Worldwide Shipping` both produce the
-same clean `% off` and `Worldwide Shipping` scan terms.
+`POST /api/scans` starts a local background collection job. Scans follow Meta continuation
+cursors **to the end of the public result pool** (there is no depth cap — a 1,294-result query
+was collected to exhaustion: 1,224 unique ads in 128 pages), deduplicate by `ad_archive_id`, and stop
+when the target is reached or the pool is exhausted. The target is a goal, not a promise that
+matching ads exist. Returned ads are revalidated locally against each shard's inclusive launch window
+before persistence; missing, invalid, or out-of-window `start_date` values are excluded and counted
+in the job's `discarded_ads` field.
+
+**Query syntax.** `|`, commas and new lines separate terms (OR — each term is its own search).
+A term wrapped in **double quotes is an exact phrase** (Meta `keyword_exact_phrase`); commas inside
+quotes do not split it. Unquoted terms are keyword searches. Pass `"exactPhrase": false` to ignore quotes.
+
+| Option | Values | Default | Notes |
+|--------|--------|---------|-------|
+| `queries` | string or array | — | see syntax above |
+| `countries` | ISO codes | `["US"]` | one shard per country |
+| `targetAds` | 30–10000 | 1000 | upper bound |
+| `lookbackDays` | 3, 7, 14, 21, 30, 60, 90 | 30 | **launch window**, enforced locally on `start_date` |
+| `activeStatus` | `active` \| `inactive` \| `all` | `active` | |
+| `sort` | `impressions` \| `recent` | `impressions` | collection order. `impressions` = Meta's impression ranking (no numeric impressions are published for commercial ads — the rank is stored as `meta_rank`). `recent` = newest launch month first, and **stops early** once pages fall entirely before the launch window: the efficient way to harvest short windows |
+| `expansion` | `none` \| `modifiers` \| `discovery` | `none` (`discovery` for a dropshipping scan with no terms) | `modifiers` adds "buy X", "X free shipping"… variants; they are subsets of the seed's pool, so they are opt-in and abandoned automatically when they stop returning new ads |
+| `mediaType`, `platform` | as search | | |
 
 ```bash
-curl -X POST http://127.0.0.1:4100/api/scans \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"dropshipping","queries":["running shoes"],"countries":["US","GB"],"targetAds":1000,"lookbackDays":30}'
+curl -X POST http://127.0.0.1:4100/api/scans -H 'Content-Type: application/json' \
+  -d '{"queries":["\"posture corrector\""],"countries":["US"],"targetAds":1000,"lookbackDays":90,"sort":"impressions"}'
 
-curl http://127.0.0.1:4100/api/scans/<job-id>
-curl 'http://127.0.0.1:4100/api/scans/<job-id>/ads?sort=impressions&limit=500'
-curl 'http://127.0.0.1:4100/api/scans/<job-id>/stores?sort=dropship&limit=500'
+curl http://127.0.0.1:4100/api/scans/<job-id>            # live progress: unique_ads, progress %, shards
+curl 'http://127.0.0.1:4100/api/scans/<job-id>/ads?sort=scale&limit=500'
+curl 'http://127.0.0.1:4100/api/scans/<job-id>/stores?sort=variants&limit=500'
 ```
 
-Valid `lookbackDays` values are exactly `3`, `7`, `14`, `21`, `30`, `60`, and `90`.
-Ad result sorts: `momentum`, `impressions`, `recent`, `dropship`. Store result sorts:
-`dropship`, `volume`, `recent`, `impressions`.
+Ad sorts: `momentum`, `scale`, `variants`, `impressions` (Meta rank), `rank`, `recent`, `dropship`;
+filters `dropship_min`, `scale_min`. Store sorts: `dropship`, `volume`, `recent`, `impressions`, `scale`, `variants`.
+Each ad carries `matched_seed` (true when a term you typed, not an expansion, found it).
+
+**Scale score (0–100)** = ads sharing the creative (`collation_count`) + days running + live status + placements.
+It shows how hard an advertiser leans on a creative. It is not spend, sales or profit.
+
+### Cross-scan registry (`/api/registry/*`)
+
+Every ad any scan has ever seen, one row each (`ad_registry`): first/last seen, scans seen in, liveness, best variant count.
+
+```bash
+curl 'http://127.0.0.1:4100/api/registry/stats'
+curl 'http://127.0.0.1:4100/api/registry/ads?sort=new&since_days=7&limit=100'      # first seen this week
+curl 'http://127.0.0.1:4100/api/registry/ads?sort=scale&active=1&min_scale=60'     # scaling now
+curl 'http://127.0.0.1:4100/api/registry/ads?sort=longest&active=1'                # longest-running live ads
+curl 'http://127.0.0.1:4100/api/registry/advertisers?sort=scale'
+curl 'http://127.0.0.1:4100/api/registry/domains?sort=variants&since_days=30'
+```
+
+Filters: `since_days`, `active=1|0`, `domain`, `page_id`, `q` (advertiser name), `min_scale`, `limit` (≤500), `offset`.
+History before the registry existed was backfilled with `node scripts/backfill-registry.js`.
 
 ## Response shape
 
@@ -175,6 +212,12 @@ Each normalized ad:
     "cards":  [{ "title": "…", "body": "…", "cta_text": "…", "link_url": "…", "image_url": "…", "video_url": "…" }]
   },
   "categories": [],
+  "collation_count": 20,                 // ads sharing this creative (Meta returns one representative per group)
+  "collation_id": "684513116749549",
+  "page_like_count": 6628, "page_categories": ["Clothing (Brand)"],
+  "ai_generated": false,                 // Meta's "digitally created media" flag
+  "ad_library_url": "https://www.facebook.com/ads/library/?id=1234567890123456",
+  "creative.link_description": "Free Shipping", "creative.extra_texts": [], "creative.extra_links": [],
   "contains_sensitive_content": false,
   "transparency": null                // populated only for political / EU ads:
   // { "currency": "USD", "spend": { "lower": 5000, "upper": 5999 },
@@ -221,6 +264,7 @@ All via `.env` (see `.env.example`) or a gitignored `config.local.json`:
 | `HTTPS_PROXY` | _(empty)_ | Route upstream calls through a proxy (needs `undici`) |
 | `USER_AGENT` | _(built-in)_ | Override the browser UA sent to Facebook |
 | `DATA_DIR` | `./data` | Where the SQLite cache lives |
+| `CANARY_INTERVAL_HOURS` | `6` | Scheduled live canary (first page + continuation); `0` disables |
 
 ## Rate-limit etiquette
 
@@ -268,6 +312,17 @@ When search suddenly returns nothing or `upstream_blocked`, in order:
    `src/lib/normalize.js`. The unit tests there will fail loudly against updated
    fixtures, telling you exactly what moved.
 
+### Known incident: every continuation page failing (Meta error 1357054)
+
+Symptom: first pages work, every "next page" fails, scans collect ~one page per query
+(`continuation cursor(s) failed`, `Upstream rejected the request (Meta error 1357054 …)`).
+Root cause (found 2026-11-04, present since ~Jul 15): Meta rejects the GraphQL POST unless it carries the
+browser fetch-metadata headers `sec-fetch-site: same-origin`, `sec-fetch-mode: cors`,
+`sec-fetch-dest: empty`. They live in `FETCH_METADATA_HEADERS` (`src/constants.js`) and
+`buildPostHeaders()` (`src/lib/graphqlClient.js`). Cookies, referer shape, `sec-ch-ua` and the
+frontend `v` revision were all ruled out. `/api/health/deep` now catches this class of break.
+If it recurs, capture a real browser pagination request and diff its headers/params against ours.
+
 ## Project layout
 
 ```
@@ -289,7 +344,11 @@ ad-library-api/
       http.js              # fetch wrapper + optional proxy
       errors.js            # error taxonomy
     middleware/            # apiKey, errorHandler
-    routes/                # search, pages, ads, health
+    routes/                # search, pages, ads, health (+/deep), scans, registry
+    lib/deepScan.js        # query parsing (exact phrases), plan, shards, scale score, early stops
+    lib/deepScanService.js # scan runner, heartbeat progress, per-scan ad/store queries
+    lib/registry.js        # cross-scan ad registry (new / scaling / longest / advertisers / domains)
+    lib/canary.js          # live first-page + continuation check
   scripts/smoke.js         # live end-to-end check / fixture capture
   test/                    # node --test suites + fixtures
 ```

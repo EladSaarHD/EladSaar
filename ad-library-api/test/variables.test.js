@@ -93,6 +93,6 @@ test('buildSearchVariables maps Ad Library impression and recent sort modes', ()
     direction: 'DESCENDING', mode: 'SORT_BY_TOTAL_IMPRESSIONS',
   });
   assert.deepStrictEqual(recent.sortData, {
-    direction: 'DESCENDING', mode: 'SORT_BY_TIME_ACTIVE',
+    direction: 'DESCENDING', mode: 'SORT_BY_RELEVANCY_MONTHLY_GROUPED',
   });
 });

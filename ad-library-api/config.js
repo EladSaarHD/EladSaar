@@ -48,6 +48,8 @@ const config = {
   maxRetries: num(fileConfig.maxRetries, env.MAX_RETRIES, 3),
   backoffBaseMs: num(fileConfig.backoffBaseMs, env.BACKOFF_BASE_MS, 5000),
   sessionTtlSeconds: num(fileConfig.sessionTtlSeconds, env.SESSION_TTL_SECONDS, 1800),
+  // Live canary (first page + continuation) cadence; 0 disables the scheduled run.
+  canaryIntervalHours: num(fileConfig.canaryIntervalHours, env.CANARY_INTERVAL_HOURS, 6),
 
   defaultCountry: (fileConfig.defaultCountry || env.DEFAULT_COUNTRY || 'US').toUpperCase(),
   proxyUrl: (fileConfig.proxyUrl || env.HTTPS_PROXY || env.https_proxy || '').trim(),

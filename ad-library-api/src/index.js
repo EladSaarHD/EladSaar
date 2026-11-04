@@ -12,6 +12,8 @@ const searchRouter = require('./routes/search');
 const pagesRouter = require('./routes/pages');
 const adsRouter = require('./routes/ads');
 const scansRouter = require('./routes/scans');
+const registryRouter = require('./routes/registry');
+const { startCanarySchedule } = require('./lib/canary');
 
 // A scraping error must never take down the server — log and keep serving.
 process.on('uncaughtException', (err) => {
@@ -36,6 +38,7 @@ app.use('/api/search', searchRouter);
 app.use('/api/pages', pagesRouter);
 app.use('/api/ads', adsRouter);
 app.use('/api/scans', scansRouter);
+app.use('/api/registry', registryRouter);
 
 // 404 for unknown /api routes.
 app.use('/api', (req, res) => {
@@ -55,6 +58,7 @@ const server = app.listen(config.port, config.bindHost, () => {
   console.log(`  Data dir:  ${config.dataDir}`);
   console.log(`  Auth:      ${config.apiKey ? 'X-API-Key required' : 'open (no API key set)'}`);
   console.log(`  Country:   ${config.defaultCountry}  ·  cache TTL ${config.cacheTtlSeconds}s\n`);
+  startCanarySchedule({ intervalHours: config.canaryIntervalHours });
 });
 
 module.exports = server;

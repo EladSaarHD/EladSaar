@@ -28,6 +28,33 @@ const DEFAULT_USER_AGENT =
 // Upstream GraphQL error codes with a known meaning.
 const UPSTREAM_ERROR_CODES = {
   STALE_SESSION: 1357004, // "Please try closing and re-opening your browser window"
+  // "Your Request Couldn't be Processed" (HTTP 200, `payload: null`). Meta returns this
+  // for GraphQL POSTs that do not look like a same-origin browser fetch — most notably
+  // when the `sec-fetch-*` request headers are missing. This was the root cause of every
+  // continuation cursor failing silently from mid-July onward.
+  REQUEST_REJECTED: 1357054,
+};
+
+// Fetch-metadata headers a browser attaches to same-origin XHR/fetch calls. Meta rejects
+// the pagination POST (error 1357054) without them. Verified live: these three are
+// necessary and sufficient; cookies, referer shape and `sec-ch-ua` are irrelevant.
+const FETCH_METADATA_HEADERS = {
+  'sec-fetch-site': 'same-origin',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-dest': 'empty',
+};
+
+// Continuation (GraphQL) pages are fixed at 10 ads per request regardless of `first`;
+// only the server-rendered first page is larger (~30). Used for page-budget planning.
+const CONTINUATION_PAGE_SIZE = 10;
+
+// Meta's own names for the two sort orders the public UI exposes. "recent" is Meta's
+// default `relevancy_monthly_grouped`: ads grouped by launch month (newest month first),
+// relevance within the month. The initial-page URL param and the continuation POST
+// variable MUST agree or the continuation returns a different ordering.
+const SORT_MODES = {
+  impressions: { url: 'total_impressions', graphql: 'SORT_BY_TOTAL_IMPRESSIONS' },
+  recent: { url: 'relevancy_monthly_grouped', graphql: 'SORT_BY_RELEVANCY_MONTHLY_GROUPED' },
 };
 
 // Accepted values for API query params → GraphQL variable values.
@@ -73,6 +100,9 @@ module.exports = {
   ASBD_ID,
   DEFAULT_USER_AGENT,
   UPSTREAM_ERROR_CODES,
+  FETCH_METADATA_HEADERS,
+  CONTINUATION_PAGE_SIZE,
+  SORT_MODES,
   ENUMS,
   DEFAULTS,
 };

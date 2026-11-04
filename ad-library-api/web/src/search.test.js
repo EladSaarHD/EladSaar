@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  COUNTRY_OPTIONS, SCAN_WINDOWS, buildSearchParams, normalizeQueries, sortAds, toggleCountry,
+  COUNTRY_OPTIONS, SCAN_ORDERS, SCAN_WINDOWS, TRACKER_VIEWS, buildSearchParams, normalizeQueries, parseQueries, sortAds, toggleCountry,
 } from './search.js';
 
 describe('search helpers', () => {
@@ -48,3 +48,37 @@ describe('search helpers', () => {
     expect(toggleCountry(['US'], 'CA')).toEqual(['US', 'CA']);
   });
 });
+
+describe('exact-phrase handling', () => {
+  it('keeps quoted terms as exact phrases and never splits inside them', () => {
+    expect(parseQueries('"posture corrector" | back brace\n"Buy 2, Get 1 Free"')).toEqual([
+      { text: 'posture corrector', exact: true },
+      { text: 'back brace', exact: false },
+      { text: 'Buy 2, Get 1 Free', exact: true },
+    ]);
+  });
+
+  it('degrades an unbalanced quote to a plain split and de-duplicates', () => {
+    expect(parseQueries('"neck fan | neck fan | neck fan').map((t) => t.text)).toEqual(['"neck fan', 'neck fan']);
+  });
+
+  it('sends search_type only when an exact phrase was requested', () => {
+    const exact = buildSearchParams({ query: 'posture corrector', country: 'US', searchType: 'keyword_exact_phrase', limit: 10 });
+    const loose = buildSearchParams({ query: 'posture corrector', country: 'US', searchType: '', limit: 10 });
+    expect(exact.get('search_type')).toBe('keyword_exact_phrase');
+    expect(loose.has('search_type')).toBe(false);
+  });
+
+  it('legacy normalizeQueries still strips wrapper quotes for display', () => {
+    expect(normalizeQueries('"posture corrector"')).toEqual(['posture corrector']);
+  });
+});
+
+describe('scan order and tracker views', () => {
+  it('offers the two Meta orderings and the cross-scan tracker views', () => {
+    expect(SCAN_ORDERS.map((o) => o.value)).toEqual(['impressions', 'recent']);
+    expect(TRACKER_VIEWS.map((v) => v.id)).toEqual(['new', 'scaling', 'longest', 'advertisers', 'stores']);
+    expect(TRACKER_VIEWS.every((v) => v.path.startsWith('/api/registry/'))).toBe(true);
+  });
+});
+

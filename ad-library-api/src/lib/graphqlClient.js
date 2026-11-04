@@ -13,6 +13,8 @@ const {
   FALLBACK_DOC_IDS,
   ASBD_ID,
   UPSTREAM_ERROR_CODES,
+  FETCH_METADATA_HEADERS,
+  SORT_MODES,
 } = require('../constants');
 
 const limiter = new RateLimiter({ minDelayMs: config.minRequestDelayMs, concurrency: 1 });
@@ -42,6 +44,55 @@ function isStaleSession(json) {
   return json.errors.some(
     (e) => e && (e.code === UPSTREAM_ERROR_CODES.STALE_SESSION || e.api_error_code === UPSTREAM_ERROR_CODES.STALE_SESSION)
   );
+}
+
+// Meta reports some failures as a top-level numeric `error` (not the GraphQL `errors`
+// array) with HTTP 200 and `payload: null`, e.g. 1357054 "Your Request Couldn't be
+// Processed". Surface the real code instead of a generic "empty payload" so a drift in
+// what Meta accepts is diagnosable from the first failed scan.
+function upstreamRejection(json) {
+  if (!json || json.data || json.error === undefined || json.error === null) return null;
+  const code = Number(json.error);
+  const summary = json.errorSummary || json.errorDescription || 'no description';
+  const err = new UpstreamBlockedError(
+    code === UPSTREAM_ERROR_CODES.REQUEST_REJECTED
+      ? `Upstream rejected the request (Meta error ${code}: ${summary}). The request no longer looks like a browser fetch — check the headers in buildPostHeaders().`
+      : `Upstream rejected the request (Meta error ${code}: ${summary})`
+  );
+  err.metaErrorCode = code;
+  return err;
+}
+
+// Headers for the GraphQL POST. The sec-fetch-* trio is REQUIRED (see constants.js).
+function buildPostHeaders({ sess, friendlyName, userAgent = session.userAgent }) {
+  return {
+    'content-type': 'application/x-www-form-urlencoded',
+    'user-agent': userAgent,
+    'x-fb-lsd': sess.lsd,
+    'x-fb-friendly-name': friendlyName,
+    'x-asbd-id': ASBD_ID,
+    accept: '*/*',
+    'accept-language': 'en-US,en;q=0.9',
+    origin: 'https://www.facebook.com',
+    referer: LIBRARY_URL,
+    ...FETCH_METADATA_HEADERS,
+    cookie: sess.cookie,
+  };
+}
+
+function epochDayToIso(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return new Date(n * 86400000).toISOString().slice(0, 10);
+}
+
+// Meta embeds the current frontend revision as `"v":"<6 hex>"` inside preloaded query
+// variables. In the server-rendered page that JSON sits inside a JS string, so the quotes
+// arrive backslash-escaped (`\"v\":\"5245b2\"`); the old regex only matched bare quotes and
+// therefore never found it.
+function extractFrontendVersion(text) {
+  const m = String(text || '').match(/\\?["']v\\?["']\s*:\s*\\?["']([a-f0-9]{6})\\?["']/i);
+  return m ? m[1] : null;
 }
 
 function findSearchMain(value) {
@@ -97,13 +148,12 @@ function discoverRuntimeMetadata(html, javascriptSources = []) {
     const before = combined.match(new RegExp(`(\\d{15,20})[^0-9]{0,300}${escaped}`));
     return before ? before[1] : null;
   };
-  const versionMatch = combined.match(/["']v["']\s*:\s*["']([a-f0-9]{6})["']/i);
   return {
     docIds: {
       search: findId('AdLibrarySearchPaginationQuery'),
       details: findId('AdLibraryV3AdDetailsQuery'),
     },
-    frontendVersion: versionMatch ? versionMatch[1] : null,
+    frontendVersion: extractFrontendVersion(combined),
   };
 }
 
@@ -124,6 +174,19 @@ function extractScriptUrls(html) {
 let runtimeMetadata = null;
 let runtimeMetadataAt = 0;
 const continuationSessions = new Map();
+const CONTINUATION_TTL_MS = 30 * 60 * 1000;
+const CONTINUATION_MAX = 500;
+
+// Each initial search stores the lsd/cookie that issued its cursor. Without eviction this
+// map grew for the life of the process.
+function pruneContinuationSessions(now = Date.now()) {
+  for (const [id, entry] of continuationSessions) {
+    if (now - entry.fetchedAt > CONTINUATION_TTL_MS) continuationSessions.delete(id);
+  }
+  while (continuationSessions.size > CONTINUATION_MAX) {
+    continuationSessions.delete(continuationSessions.keys().next().value);
+  }
+}
 
 async function refreshRuntimeMetadata({ force = false } = {}) {
   if (!force && runtimeMetadata && Date.now() - runtimeMetadataAt < 6 * 60 * 60 * 1000) {
@@ -187,6 +250,9 @@ function parseInitialSearchHtml(html) {
 }
 
 async function requestInitialSearch(variables) {
+  const sortMode = variables.sortData?.mode === 'SORT_BY_TIME_ACTIVE' || variables.sortData?.mode === SORT_MODES.recent.graphql
+    ? SORT_MODES.recent
+    : SORT_MODES.impressions;
   const params = new URLSearchParams({
     active_status: variables.activeStatus || 'all',
     ad_type: String(variables.adType || 'ALL').toLowerCase(),
@@ -196,13 +262,18 @@ async function requestInitialSearch(variables) {
     q: variables.queryString || '',
     search_type: variables.searchType || 'keyword_unordered',
     'sort_data[direction]': 'desc',
-    'sort_data[mode]': variables.sortData?.mode === 'SORT_BY_TIME_ACTIVE' ? 'time_active' : 'total_impressions',
+    'sort_data[mode]': sortMode.url,
   });
   if (variables.viewAllPageID && variables.viewAllPageID !== '0') {
     params.set('view_all_page_id', variables.viewAllPageID);
   }
-  if (variables.startDate?.min != null) params.set('start_date[min]', String(variables.startDate.min));
-  if (variables.startDate?.max != null) params.set('start_date[max]', String(variables.startDate.max));
+  // Meta's date filter takes ISO dates and means "ads that ran during this window"
+  // (not "launched in"). Epoch-day integers — what this used to send — are silently
+  // ignored. Launch-window precision is enforced locally after collection.
+  const dateMin = typeof variables.startDate?.min === 'number' ? epochDayToIso(variables.startDate.min) : variables.startDate?.min;
+  const dateMax = typeof variables.startDate?.max === 'number' ? epochDayToIso(variables.startDate.max) : variables.startDate?.max;
+  if (dateMin) params.set('start_date[min]', dateMin);
+  if (dateMax) params.set('start_date[max]', dateMax);
   for (const platform of variables.publisherPlatforms || []) params.append('platforms[0]', String(platform).toLowerCase());
   const url = `${LIBRARY_URL}?${params.toString()}`;
   const { res, html, cookie } = await limiter.schedule(() => session.fetchDocument(url));
@@ -211,9 +282,10 @@ async function requestInitialSearch(variables) {
   }
   const data = parseInitialSearchHtml(html);
   const lsd = session.extractLsd(html);
-  if (data.__continuation && lsd && cookie) {
+  if (data.__continuation && lsd && cookie !== undefined) {
     const stateID = crypto.randomUUID();
-    continuationSessions.set(stateID, { lsd, cookie, fetchedAt: Date.now() });
+    continuationSessions.set(stateID, { lsd, cookie, v: extractFrontendVersion(html), fetchedAt: Date.now() });
+    pruneContinuationSessions();
     data.__continuation.stateID = stateID;
   }
   return data;
@@ -246,18 +318,7 @@ async function postGraphql({ friendlyName, docId, variables, sess }) {
 
   const res = await httpFetch(GRAPHQL_URL, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      'user-agent': session.userAgent,
-      'x-fb-lsd': sess.lsd,
-      'x-fb-friendly-name': friendlyName,
-      'x-asbd-id': ASBD_ID,
-      accept: '*/*',
-      'accept-language': 'en-US,en;q=0.9',
-      origin: 'https://www.facebook.com',
-      referer: LIBRARY_URL,
-      cookie: sess.cookie,
-    },
+    headers: buildPostHeaders({ sess, friendlyName }),
     body: form.toString(),
     redirect: 'follow',
   });
@@ -275,10 +336,11 @@ async function attempt({ kind, variables, force }) {
   const friendlyName = FRIENDLY_NAMES[kind];
   const runtime = await refreshRuntimeMetadata();
   const docId = runtime?.docIds?.[kind] || sess.docIds?.[kind] || FALLBACK_DOC_IDS[kind];
+  // Prefer the revision the cursor's own page was served with, then the discovered
+  // runtime revision, then the compiled-in default.
+  const frontendVersion = storedSession?.v || runtime?.frontendVersion || null;
   const withRuntimeVersion =
-    runtime?.frontendVersion && kind === 'search'
-      ? { ...variables, v: runtime.frontendVersion }
-      : variables;
+    frontendVersion && kind === 'search' ? { ...variables, v: frontendVersion } : variables;
   const { continuationStateID: _stateID, ...currentVariables } = withRuntimeVersion;
 
   const res = await limiter.schedule(() =>
@@ -308,6 +370,8 @@ async function attempt({ kind, variables, force }) {
     err.retryable = 'refresh';
     throw err;
   }
+  const rejection = upstreamRejection(json);
+  if (rejection) throw rejection;
   if (json && Array.isArray(json.errors) && json.errors.length && !json.data) {
     const msg = json.errors[0] && json.errors[0].message;
     throw new UpstreamBlockedError(`Upstream GraphQL error: ${msg || 'unknown'}`);
@@ -382,6 +446,11 @@ module.exports = {
   parseInitialSearchHtml,
   parseDetailsHtml,
   discoverRuntimeMetadata,
+  extractFrontendVersion,
+  upstreamRejection,
+  buildPostHeaders,
+  epochDayToIso,
+  pruneContinuationSessions,
   extractScriptUrls,
   refreshRuntimeMetadata,
   findSearchMain,

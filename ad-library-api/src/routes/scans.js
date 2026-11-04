@@ -40,6 +40,7 @@ router.get('/:id/ads', (req, res) => {
     limit: req.query.limit,
     offset: req.query.offset,
     dropshipMin: req.query.dropship_min,
+    scaleMin: req.query.scale_min,
     onlyImpressions: req.query.only_impressions === '1',
   }));
 });

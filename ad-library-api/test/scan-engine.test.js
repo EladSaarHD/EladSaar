@@ -1,0 +1,277 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adsignal-engine-'));
+process.env.DATA_DIR = dataDir;
+
+// Scripted stand-in for the Meta-facing pipeline. Each test installs `script(params, variables)`.
+let script = null;
+const calls = [];
+const listQueryPath = require.resolve('../src/lib/listQuery');
+require.cache[listQueryPath] = {
+  id: listQueryPath, filename: listQueryPath, loaded: true,
+  exports: {
+    runListQuery: async ({ cacheParams, variables }) => {
+      calls.push({ params: cacheParams, variables });
+      return script(cacheParams, variables);
+    },
+  },
+};
+
+const db = require('../src/db');
+const service = require('../src/lib/deepScanService');
+const registry = require('../src/lib/registry');
+
+const SHARD = { query: 'posture corrector', country: 'US', startDate: '2026-10-01', endDate: '2026-11-30' };
+const FAST = { requestPauseMs: 0, pagePauseMs: 0, initialRetryPauseMs: 0, continuationRetryPauseMs: 0 };
+
+function makeAd(id, overrides = {}) {
+  const bucket = Number(String(id).replace(/\D/g, '')) % 3; // three advertisers / three stores
+  return {
+    ad_archive_id: String(id), page_id: `p${bucket}`, page_name: `Page ${bucket}`, start_date: '2026-10-15', is_active: true,
+    publisher_platforms: ['FACEBOOK'], collation_count: 1, creative: { link_url: `https://shop${bucket}.example/products/x` }, ...overrides,
+  };
+}
+
+function newJob(config, shards = [SHARD]) {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  db.prepare(`INSERT INTO scan_jobs (id,status,config_json,total_shards,completed_shards,unique_ads,discarded_ads,created_at,updated_at)
+    VALUES (?, 'queued', ?, ?, 0, 0, 0, ?, ?)`).run(id, JSON.stringify(config), shards.length, now, now);
+  return id;
+}
+
+// Pages of ads: page 1 = 30 ads (server-rendered), continuation pages = 10 ads, like Meta.
+function pagedScript(totalAds, { makeOne = makeAd } = {}) {
+  return (params) => {
+    const pageIndex = params.cursor ? Number(params.cursor.split('-')[1]) : 0;
+    const start = pageIndex === 0 ? 0 : 30 + (pageIndex - 1) * 10;
+    const size = pageIndex === 0 ? 30 : 10;
+    const ads = [];
+    for (let i = start; i < Math.min(start + size, totalAds); i += 1) ads.push(makeOne(i));
+    const hasNext = start + size < totalAds;
+    return { ads, page_info: { has_next_page: hasNext, end_cursor: hasNext ? `c-${pageIndex + 1}` : null }, count: totalAds };
+  };
+}
+
+test('runScan follows continuation pages to the target and records Meta rank + scale', async () => {
+  calls.length = 0;
+  script = pagedScript(200);
+  const config = { targetAds: 70, lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const id = newJob(config);
+  await service.runScan(id, [SHARD], config);
+
+  const job = service.getJob(id);
+  assert.strictEqual(job.status, 'complete');
+  assert.strictEqual(job.unique_ads, 70, 'page1(30)+4 continuation pages(40)');
+  assert.strictEqual(calls.length, 5);
+  assert.deepStrictEqual(calls.map((c) => c.params.cursor ?? null), [null, 'c-1', 'c-2', 'c-3', 'c-4']);
+
+  const byRank = service.listAds(id, { sort: 'rank', limit: 500 }).ads;
+  assert.deepStrictEqual(byRank.slice(0, 3).map((a) => a.meta_rank), [0, 1, 2]);
+  assert.strictEqual(byRank[69].meta_rank, 69);
+  // For an impressions-ordered scan the stored rank IS the impression ranking.
+  const byImpressions = service.listAds(id, { sort: 'impressions', limit: 5 }).ads;
+  assert.deepStrictEqual(byImpressions.map((a) => a.ad_archive_id), ['0', '1', '2', '3', '4']);
+});
+
+test('the page budget scales with the target instead of the old hard cap of 3 pages', async () => {
+  calls.length = 0;
+  script = pagedScript(1000);
+  const config = { targetAds: 300, lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const id = newJob(config);
+  await service.runScan(id, [SHARD], config);
+  assert.strictEqual(service.getJob(id).unique_ads, 300);
+  assert.ok(calls.length > 3, `expected more than 3 requests, made ${calls.length}`);
+  assert.strictEqual(calls.length, 28, '1 first page + 27 continuations');
+});
+
+test('a long single-shard scan reports live progress instead of sitting at 0% until the shard ends', async () => {
+  const observed = [];
+  let jobId = null;
+  const inner = pagedScript(100);
+  script = (params, variables) => {
+    if (params.cursor === 'c-3') observed.push(service.getJob(jobId));
+    return inner(params, variables);
+  };
+  const config = { targetAds: 100, lookbackDays: 90, activeStatus: 'active', sort: 'impressions', heartbeatMs: 0, ...FAST };
+  jobId = newJob(config);
+  await service.runScan(jobId, [SHARD], config);
+  const midway = observed[0];
+  assert.strictEqual(midway.status, 'running');
+  assert.ok(midway.unique_ads >= 50, `heartbeat should have recorded collected ads, saw ${midway.unique_ads}`);
+  assert.ok(midway.progress > 0 && midway.progress < 100, `progress ${midway.progress}`);
+  assert.strictEqual(midway.completed_shards, 0, 'shard not finished yet');
+  const done = service.getJob(jobId);
+  assert.strictEqual(done.status, 'complete');
+  assert.strictEqual(done.progress, 100);
+});
+
+test('exact-phrase shards run as keyword_exact_phrase and carry the scan sort mode to Meta', async () => {
+  calls.length = 0;
+  script = pagedScript(5);
+  const config = { targetAds: 30, lookbackDays: 90, activeStatus: 'active', sort: 'recent', ...FAST };
+  const id = newJob(config);
+  await service.runScan(id, [{ ...SHARD, searchType: 'keyword_exact_phrase' }], config);
+  assert.strictEqual(calls[0].variables.searchType, 'keyword_exact_phrase');
+  assert.strictEqual(calls[0].variables.sortData.mode, 'SORT_BY_RELEVANCY_MONTHLY_GROUPED');
+  calls.length = 0;
+  const id2 = newJob(config);
+  await service.runScan(id2, [SHARD], { ...config, sort: 'impressions' });
+  assert.strictEqual(calls[0].variables.searchType, 'keyword_unordered');
+  assert.strictEqual(calls[0].variables.sortData.mode, 'SORT_BY_TOTAL_IMPRESSIONS');
+});
+
+test('a recent-sorted launch-window scan stops once pages are entirely older than the window', async () => {
+  calls.length = 0;
+  const old = { start_date: '2026-06-01' };
+  script = (params) => {
+    const page = params.cursor ? Number(params.cursor.split('-')[1]) : 0;
+    const ads = page === 0 ? [makeAd(1), makeAd(2)] : [makeAd(100 + page * 2, old), makeAd(101 + page * 2, old)];
+    return { ads, page_info: { has_next_page: true, end_cursor: `c-${page + 1}` }, count: 9999 };
+  };
+  const config = { targetAds: 500, lookbackDays: 30, activeStatus: 'active', sort: 'recent', ...FAST };
+  const id = newJob(config);
+  const shard = { ...SHARD, startDate: '2026-10-06', endDate: '2026-11-04' };
+  await service.runScan(id, [shard], config);
+  assert.strictEqual(calls.length, 3, 'in-window page + two all-older pages, then stop');
+  const job = service.getJob(id);
+  assert.strictEqual(job.unique_ads, 2);
+  assert.match(job.error, /stopped early after paging past the 30-day launch window/);
+});
+
+test('an expansion shard that only returns already-collected ads is abandoned, not paged to the end', async () => {
+  calls.length = 0;
+  // Seed shard collects 40 ads; the modifier shard then keeps returning those same ads.
+  script = (params, variables) => {
+    if (variables.queryString === 'posture corrector') return pagedScript(40)(params);
+    const page = params.cursor ? Number(params.cursor.split('-')[1]) : 0;
+    return { ads: Array.from({ length: 10 }, (_, i) => makeAd(i)), page_info: { has_next_page: true, end_cursor: `c-${page + 1}` }, count: 500 };
+  };
+  const config = { targetAds: 500, lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shards = [SHARD, { ...SHARD, query: 'buy posture corrector', origin: 'modifier' }];
+  const id = newJob(config, shards);
+  await service.runScan(id, shards, config);
+  const modifierCalls = calls.filter((c) => c.variables.queryString === 'buy posture corrector').length;
+  assert.strictEqual(modifierCalls, 3, 'stops after 3 pages with no new ads');
+  const job = service.getJob(id);
+  assert.strictEqual(job.unique_ads, 40);
+  assert.match(job.error, /1 expansion shard\(s\) stopped early/);
+});
+
+test('listAds supports scale / variants sorting and a minimum-scale filter; seed matches are flagged', async () => {
+  script = pagedScript(30, { makeOne: (i) => makeAd(i, { collation_count: i === 7 ? 25 : 1, start_date: i === 7 ? '2026-10-02' : '2026-11-02' }) });
+  const config = { targetAds: 30, queries: ['posture corrector'], lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const id = newJob(config);
+  await service.runScan(id, [SHARD], config);
+  const top = service.listAds(id, { sort: 'scale', limit: 3 });
+  assert.strictEqual(top.ads[0].ad_archive_id, '7', 'the 25-variant, month-old ad outranks fresh single ads');
+  assert.strictEqual(top.ads[0].variant_count, 25);
+  assert.ok(top.ads[0].scale_score > top.ads[1].scale_score);
+  assert.strictEqual(top.ads[0].matched_seed, true);
+  const filtered = service.listAds(id, { sort: 'scale', scaleMin: top.ads[0].scale_score });
+  assert.ok(filtered.total >= 1 && filtered.total < 30);
+  assert.strictEqual(service.listAds(id, { sort: 'variants', limit: 1 }).ads[0].ad_archive_id, '7');
+});
+
+test('the registry tracks each distinct ad across scans: first/last seen, scans seen, best variants', async () => {
+  script = pagedScript(12, { makeOne: (i) => makeAd(`R${i}`, { collation_count: 3 }) });
+  const config = { targetAds: 30, lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const first = newJob(config);
+  await service.runScan(first, [SHARD], config);
+  const before = db.prepare("SELECT * FROM ad_registry WHERE ad_archive_id='RR0' OR ad_archive_id='R0'").get();
+  assert.ok(before, 'registry row created');
+  assert.strictEqual(before.seen_scans, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  script = pagedScript(12, { makeOne: (i) => makeAd(`R${i}`, { collation_count: i === 0 ? 9 : 3 }) });
+  const second = newJob(config);
+  await service.runScan(second, [SHARD], config);
+  const after = db.prepare("SELECT * FROM ad_registry WHERE ad_archive_id='R0'").get();
+  assert.strictEqual(after.seen_scans, 2);
+  assert.strictEqual(after.first_seen, before.first_seen, 'first_seen is never moved');
+  assert.ok(after.last_seen > before.last_seen);
+  assert.strictEqual(after.max_variants, 9);
+  assert.strictEqual(after.first_scan_id, first);
+  assert.strictEqual(after.last_scan_id, second);
+  assert.match(after.domain, /^shop\d\.example$/);
+  // Re-saving within one scan must not inflate seen_scans.
+  assert.strictEqual(db.prepare("SELECT seen_scans FROM ad_registry WHERE ad_archive_id='R1'").get().seen_scans, 2);
+});
+
+test('registry queries: new-since, advertiser and domain roll-ups, filters', async () => {
+  const stats = registry.stats();
+  assert.ok(stats.ads >= 12 && stats.new_24h >= 12);
+
+  const fresh = registry.listAds({ sort: 'new', sinceDays: 1, limit: 500 });
+  assert.ok(fresh.total >= 12);
+  assert.ok(fresh.ads[0].registry.first_seen >= fresh.ads[fresh.ads.length - 1].registry.first_seen);
+  // Backdate one ad's first sighting: a 7-day "new" window must exclude it, a 60-day one include it.
+  db.prepare("UPDATE ad_registry SET first_seen = ? WHERE ad_archive_id = 'R3'").run(Date.now() - 30 * 86400000);
+  const inLastWeek = registry.listAds({ sinceDays: 7, limit: 500 }).ads.map((ad) => ad.ad_archive_id);
+  const inLastTwoMonths = registry.listAds({ sinceDays: 60, limit: 500 }).ads.map((ad) => ad.ad_archive_id);
+  assert.ok(!inLastWeek.includes('R3'));
+  assert.ok(inLastTwoMonths.includes('R3'));
+
+  const byScale = registry.listAds({ sort: 'scale', limit: 1 }).ads[0];
+  assert.strictEqual(byScale.variant_count !== undefined, true);
+
+  const longest = registry.listAds({ sort: 'longest', active: '1', limit: 3 }).ads;
+  assert.ok(longest.every((ad) => ad.is_active));
+  assert.ok(longest[0].start_date <= longest[longest.length - 1].start_date);
+
+  const advertisers = registry.listAdvertisers({ sort: 'ads', limit: 10 }).advertisers;
+  assert.ok(advertisers.length >= 3);
+  assert.ok(advertisers[0].ads >= advertisers[advertisers.length - 1].ads);
+  assert.ok(advertisers[0].domains.length >= 1);
+
+  const domains = registry.listDomains({ sort: 'variants', limit: 10 }).domains;
+  assert.ok(domains.every((d) => /\.example$/.test(d.domain)));
+  assert.strictEqual(registry.listAds({ domain: 'www.SHOP1.example', limit: 500 }).ads.every((ad) => ad.registry.domain === 'shop1.example'), true);
+});
+
+test('createScan: seeds-only by default, quoted terms become exact phrases, bad options are rejected', async () => {
+  calls.length = 0;
+  script = () => ({ ads: [], page_info: { has_next_page: false, end_cursor: null }, count: 0 });
+  const job = service.createScan({ queries: '"posture corrector" | back brace', lookbackDays: 30, targetAds: 30 });
+  assert.deepStrictEqual(job.config.queries, ['posture corrector', 'back brace']);
+  assert.deepStrictEqual(job.config.exactTerms, ['posture corrector']);
+  assert.strictEqual(job.config.expansion, 'none');
+  assert.strictEqual(job.config.sort, 'impressions');
+  assert.deepStrictEqual(job.config.expandedQueries, ['posture corrector', 'back brace']);
+  assert.strictEqual(job.config.queryExpression, '"posture corrector" | back brace');
+  assert.strictEqual(job.total_shards, 2);
+
+  // wait for the (empty) scan to finish before starting the next one
+  for (let i = 0; i < 100 && ['queued', 'running'].includes(service.getJob(job.id).status); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.strictEqual(service.getJob(job.id).status, 'complete');
+  const byQuery = Object.fromEntries(calls.map((c) => [c.variables.queryString, c.variables.searchType]));
+  assert.strictEqual(byQuery['posture corrector'], 'keyword_exact_phrase');
+  assert.strictEqual(byQuery['back brace'], 'keyword_unordered');
+
+  assert.throws(() => service.createScan({ queries: 'x', lookbackDays: 30, sort: 'bogus' }), /Invalid sort/);
+  assert.throws(() => service.createScan({ queries: 'x', lookbackDays: 30, expansion: 'everything' }), /Invalid expansion/);
+  assert.throws(() => service.createScan({ queries: 'x', lookbackDays: 31 }), /Launch window/);
+});
+
+test('createScan: a dropshipping store-finder with no terms still runs the discovery phrases', async () => {
+  const job = service.createScan({ mode: 'dropshipping', queries: [], lookbackDays: 7, targetAds: 30 });
+  assert.strictEqual(job.config.expansion, 'discovery');
+  assert.ok(job.config.expandedQueries.includes('free worldwide shipping'));
+  for (let i = 0; i < 300 && ['queued', 'running'].includes(service.getJob(job.id).status); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+});
+
+test.after(() => {
+  db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});

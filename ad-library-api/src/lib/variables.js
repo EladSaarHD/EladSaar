@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const config = require('../../config');
 const { InvalidParamsError } = require('./errors');
-const { ENUMS, DEFAULTS } = require('../constants');
+const { ENUMS, DEFAULTS, SORT_MODES } = require('../constants');
 
 // Map a user-supplied param onto an allowed enum value, case-insensitively.
 // Accepts either the API-friendly key ("active") or the raw FB value ("ACTIVE").
@@ -58,10 +58,11 @@ function country(params) {
 function sortData(value) {
   const mode = String(value || 'impressions').toLowerCase();
   if (mode === 'recent') {
-    return { direction: 'DESCENDING', mode: 'SORT_BY_TIME_ACTIVE' };
+    // Meta's "launched <month>" grouping: newest launch month first.
+    return { direction: 'DESCENDING', mode: SORT_MODES.recent.graphql };
   }
   if (mode === 'impressions') {
-    return { direction: 'DESCENDING', mode: 'SORT_BY_TOTAL_IMPRESSIONS' };
+    return { direction: 'DESCENDING', mode: SORT_MODES.impressions.graphql };
   }
   throw new InvalidParamsError('Invalid sort. Allowed: impressions, recent');
 }
@@ -102,7 +103,7 @@ function baseVariables(params) {
     regions: null,
     sortData: sortData(params.sort),
     source: null,
-    v: 'd427bf',
+    v: '5245b2', // fallback only; the live value is read from the page that issued the cursor
   };
 }
 

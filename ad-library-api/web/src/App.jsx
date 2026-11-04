@@ -5,13 +5,13 @@ import {
   Play, Search, SlidersHorizontal, Sparkles, Target, X, Zap,
 } from 'lucide-react';
 import {
-  COUNTRY_OPTIONS, SCAN_WINDOWS, buildSearchParams, normalizeQueries, sortAds, toggleCountry,
+  COUNTRY_OPTIONS, SCAN_ORDERS, SCAN_WINDOWS, TRACKER_VIEWS, buildSearchParams, normalizeQueries, parseQueries, sortAds, toggleCountry,
 } from './search.js';
 
 const initialFilters = {
   queries: 'running shoes', country: 'US', activeStatus: 'active', mediaType: 'all',
   platform: '', startDate: '', endDate: '', limit: 12, targetAds: 500,
-  scanCountries: ['US'], lookbackDays: 14,
+  scanCountries: ['US'], lookbackDays: 14, scanSort: 'impressions',
 };
 
 function daysRunning(date) {
@@ -107,7 +107,7 @@ function App() {
   }), [ads]);
 
   async function loadScanAds(id, offset = 0, append = false, sortMode = sort, mode = workspaceMode) {
-    const backendSort = ['momentum', 'impressions', 'recent', 'dropship'].includes(sortMode) ? sortMode : 'momentum';
+    const backendSort = ['momentum', 'impressions', 'recent', 'dropship', 'scale', 'variants'].includes(sortMode) ? sortMode : 'momentum';
     const params = new URLSearchParams({ sort: backendSort, limit: '100', offset: String(offset) });
     if (mode === 'dropshipping') params.set('dropship_min', '3');
     const response = await fetch(`/api/scans/${id}/ads?${params}`);
@@ -139,13 +139,14 @@ function App() {
   async function startScan(event) {
     event?.preventDefault();
     setLoading(true); setError(''); setAds([]); setSearched(false); setScanJob(null);
-    const queries = normalizeQueries(filters.queries);
+    // Send the raw text: wrapping a phrase in "quotes" asks the server for an exact-phrase search.
+    const queries = filters.queries;
     try {
       const response = await fetch('/api/scans', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: workspaceMode === 'dropshipping' ? 'dropshipping' : 'deep',
-          queries, countries: filters.scanCountries,
+          queries, sort: filters.scanSort, countries: filters.scanCountries,
           targetAds: Number(filters.targetAds), lookbackDays: Number(filters.lookbackDays),
           activeStatus: filters.activeStatus, mediaType: filters.mediaType, platform: filters.platform,
         }),
@@ -159,12 +160,12 @@ function App() {
 
   async function runSearch(event, requestedSort = sort) {
     event?.preventDefault();
-    const queries = normalizeQueries(filters.queries);
-    if (!queries.length) return;
+    const terms = parseQueries(filters.queries);
+    if (!terms.length) return;
     setLoading(true); setError(''); setSelected(null);
     try {
-      const responses = await Promise.all(queries.map(async (query) => {
-        const params = buildSearchParams({ ...filters, query, sort: requestedSort });
+      const responses = await Promise.all(terms.map(async ({ text: query, exact }) => {
+        const params = buildSearchParams({ ...filters, query, sort: requestedSort, searchType: exact ? 'keyword_exact_phrase' : '' });
         const response = await fetch(`/api/search?${params}`);
         const data = await response.json();
         if (!response.ok) throw new Error(data.error?.message || 'Search failed');
@@ -250,9 +251,12 @@ function App() {
           <button className={workspaceMode === 'search' ? 'active' : ''} onClick={() => { setWorkspaceMode('search'); setScanJob(null); setSort('evidence'); setResultView('ads'); }}><span>Quick search</span><small>One-pass creative lookup</small></button>
           <button className={workspaceMode === 'deep' ? 'active' : ''} onClick={() => { setWorkspaceMode('deep'); setScanJob(null); setSort('momentum'); setResultView('ads'); }}><span>Deep scan</span><small>Broader market evidence</small></button>
           <button className={workspaceMode === 'dropshipping' ? 'active' : ''} onClick={() => { setWorkspaceMode('dropshipping'); setScanJob(null); setSort('dropship'); setResultView('stores'); }}><span><Sparkles size={14} /> Dropshipping finder</span><small>Storefront discovery</small></button>
+          <button className={workspaceMode === 'tracker' ? 'active' : ''} onClick={() => { setWorkspaceMode('tracker'); setScanJob(null); setSearched(false); setError(''); }}><span><Activity size={14} /> Tracker</span><small>New, scaling &amp; longest-running</small></button>
         </nav>
 
-        <form className="search-panel" onSubmit={workspaceMode === 'search' ? runSearch : startScan}>
+        {workspaceMode === 'tracker' && <Tracker onOpen={openDetails} />}
+
+        {workspaceMode !== 'tracker' && <form className="search-panel" onSubmit={workspaceMode === 'search' ? runSearch : startScan}>
           <div className="query-row">
             <Search size={21} />
             <textarea value={filters.queries} onChange={(e) => update('queries', e.target.value)} placeholder={workspaceMode === 'dropshipping' ? 'Optional product niches—leave broad for store discovery…' : 'Search brands, products, pains, or benefits…'} rows="1" />
@@ -263,7 +267,8 @@ function App() {
             <label><span>Custom target</span><input type="number" min="30" max="10000" step="10" value={filters.targetAds} onChange={(e) => update('targetAds', e.target.value)} /></label>
             <div className="country-picker"><span>Countries</span><div className="country-chips">{COUNTRY_OPTIONS.map((country) => <button type="button" key={country} className={filters.scanCountries.includes(country) ? 'active' : ''} onClick={() => update('scanCountries', toggleCountry(filters.scanCountries, country))}>{country}</button>)}</div></div>
             <label><span>Launch window</span><select value={filters.lookbackDays} onChange={(e) => update('lookbackDays', e.target.value)}>{SCAN_WINDOWS.map((days) => <option key={days} value={days}>{days} days</option>)}</select></label>
-            <div className="scan-note"><Activity size={15} /><span>One scan at a time. Results stream in and remain stored locally.</span></div>
+            <label><span>Collect in order</span><select value={filters.scanSort} onChange={(e) => update('scanSort', e.target.value)}>{SCAN_ORDERS.map((order) => <option key={order.value} value={order.value}>{order.label}</option>)}</select></label>
+            <div className="scan-note"><Activity size={15} /><span>One scan at a time; results stream in and stay local. Put a phrase in "quotes" for an exact match. “Newest launches” finds new ads fastest for short windows.</span></div>
           </div>}
           <div className={`filters ${workspaceMode !== 'search' ? 'scan-filters' : ''} ${filtersOpen ? 'open' : ''}`}>
             {workspaceMode === 'search' && <label><span>Country</span><div className="select-wrap"><select value={filters.country} onChange={(e) => update('country', e.target.value)}>{COUNTRY_OPTIONS.map((c) => <option key={c}>{c}</option>)}</select><ChevronDown size={14} /></div></label>}
@@ -274,17 +279,17 @@ function App() {
             <label><span>To</span><input type="date" value={filters.endDate} onChange={(e) => update('endDate', e.target.value)} /></label></>}
           </div>
           <button type="button" className="filter-toggle" onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={16} /> Filters <span>{filtersOpen ? 'Hide' : 'Show'}</span></button>
-        </form>
+        </form>}
 
-        {error && <div className="error-banner"><Activity size={18} />{error}</div>}
-        {scanJob && ['queued', 'running'].includes(scanJob.status) && <section className="scan-progress">
+        {error && workspaceMode !== 'tracker' && <div className="error-banner"><Activity size={18} />{error}</div>}
+        {workspaceMode !== 'tracker' && scanJob && ['queued', 'running'].includes(scanJob.status) && <section className="scan-progress">
           <div className="scan-progress-head"><div><LoaderCircle className="spin" size={19} /><span><strong>Deep scan running</strong><small>{scanJob.unique_ads.toLocaleString()} unique ads collected{scanJob.discarded_ads > 0 && <> · <DiscardedCount count={scanJob.discarded_ads} /></>}</small></span></div><b>{scanJob.progress}%</b></div>
           <div className="progress-track"><i style={{ width: `${scanJob.progress}%` }} /></div>
           <p>Shard {scanJob.completed_shards} of {scanJob.total_shards} · Partial results appear below as they arrive and are stored locally.</p>
         </section>}
-        {scanJob?.status === 'complete' && scanJob.error && <div className="scan-summary"><Activity size={17} /><span>{scanJob.error}</span></div>}
+        {workspaceMode !== 'tracker' && scanJob?.status === 'complete' && scanJob.error && <div className="scan-summary"><Activity size={17} /><span>{scanJob.error}</span></div>}
 
-        {searched && !loading && <>
+        {workspaceMode !== 'tracker' && searched && !loading && <>
           <section className="stats-grid">
             <div className="stat-card"><span>Unique ads</span><strong>{ads.length}</strong><small>{total.toLocaleString()} market matches</small></div>
             <div className="stat-card"><span>Active now</span><strong>{stats.active}</strong><small>{ads.length ? Math.round(stats.active / ads.length * 100) : 0}% of this set</small></div>
@@ -295,7 +300,7 @@ function App() {
           <div className="results-toolbar">
             <div><h2>{resultView === 'stores' ? 'Likely storefronts' : 'Creative results'}</h2><p>{resultView === 'stores' ? `${storeTotal.toLocaleString()} unique merchant domains` : normalizeQueries(filters.queries).join(' | ')}</p></div>
             <div className="result-actions">{workspaceMode !== 'search' && <div className="view-toggle"><button className={resultView === 'ads' ? 'active' : ''} onClick={() => setResultView('ads')}>Ads</button><button className={resultView === 'stores' ? 'active' : ''} onClick={() => setResultView('stores')}>Stores</button></div>}
-            <label className="sort-control"><Filter size={15} /><select value={sort} onChange={(e) => changeSort(e.target.value)}>{workspaceMode === 'search' ? <><option value="evidence">Best evidence</option><option value="impressions">Impressions: high to low</option><option value="recent">Most recent</option><option value="longest">Longest running</option><option value="advertiser">Advertiser A–Z</option></> : <><option value="momentum">High momentum + recent</option><option value="impressions">Impressions: high to low</option><option value="recent">Most recent</option><option value="dropship">Dropshipping likelihood</option></>}</select></label></div>
+            <label className="sort-control"><Filter size={15} /><select value={sort} onChange={(e) => changeSort(e.target.value)}>{workspaceMode === 'search' ? <><option value="evidence">Best evidence</option><option value="impressions">Impressions: high to low</option><option value="recent">Most recent</option><option value="longest">Longest running</option><option value="advertiser">Advertiser A–Z</option></> : <><option value="momentum">High momentum + recent</option><option value="scale">Scale: variants + longevity</option><option value="variants">Most ad variants</option><option value="impressions">Meta impression rank</option><option value="recent">Most recent</option><option value="dropship">Dropshipping likelihood</option></>}</select></label></div>
           </div>
 
           {resultView === 'ads' ? <section className="ad-grid">
@@ -306,7 +311,7 @@ function App() {
           {!ads.length && <div className="empty-state"><Target size={36} /><h3>No ads found</h3><p>Try a broader term, another country, or “All ads”.</p></div>}
         </>}
 
-        {recentScans.length > 0 && !searched && !loading && <section className="recent-scans">
+        {workspaceMode !== 'tracker' && recentScans.length > 0 && !searched && !loading && <section className="recent-scans">
           <div className="section-heading"><div><span>Recent work</span><h2>Resume a saved scan</h2></div><small>Results remain on this Mac</small></div>
           <div className="recent-scan-grid">{recentScans.slice(0, 4).map((job) => <button key={job.id} className="recent-scan" onClick={() => void openSavedScan(job)} disabled={job.unique_ads === 0}>
             <span className={`recent-state state-${job.status}`}>{job.status}</span>
@@ -316,7 +321,7 @@ function App() {
           </button>)}</div>
         </section>}
 
-        {!searched && !loading && <section className="starter-grid">
+        {workspaceMode !== 'tracker' && !searched && !loading && <section className="starter-grid">
           <div><Layers3 size={22} /><h3>Multi-query search</h3><p>Separate terms with pipes, commas, or new lines to compare related angles.</p></div>
           <div><Target size={22} /><h3>Evidence scoring</h3><p>Prioritize active, durable, multi-platform campaigns—not vanity metrics.</p></div>
           <div><Sparkles size={22} /><h3>Hunter-ready</h3><p>Open any result, copy a focused brief, and continue the analysis with Hunter.</p></div>
@@ -332,7 +337,7 @@ export function StoreCard({ store, onOpen }) {
   const page = store.page_names?.[0] || store.domain;
   return <article className="store-card">
     <div className="store-head"><div className="store-icon">{page.slice(0, 1).toUpperCase()}</div><div><strong>{page}</strong><a href={`https://${store.domain}`} target="_blank" rel="noreferrer">{store.domain} <ArrowUpRight size={12} /></a></div><Pill tone="success">DS {store.dropship_score}</Pill></div>
-    <div className="store-metrics"><div><span>Ads found</span><strong>{store.ad_count}</strong></div><div><span>Active</span><strong>{store.active_ads}</strong></div><div><span>Momentum</span><strong>{store.momentum_score}</strong></div></div>
+    <div className="store-metrics"><div><span>Ads found</span><strong>{store.ad_count}</strong></div><div><span>Active</span><strong>{store.active_ads}</strong></div><div><span>Variants</span><strong>{store.total_variants ?? '—'}</strong></div><div><span>Scale</span><strong>{store.scale_score ?? store.momentum_score}</strong></div></div>
     <div className="tag-list">{store.countries?.slice(0, 5).map((country) => <Pill key={country}>{country}</Pill>)}{store.matched_queries?.slice(0, 3).map((query) => <Pill key={query} tone="accent">{query}</Pill>)}</div>
     <div className="store-foot"><span>Latest launch {store.latest_start || 'unknown'}</span><button onClick={onOpen}>Inspect sample ad <ChevronRight size={14} /></button></div>
   </article>;
@@ -352,7 +357,7 @@ function AdCard({ ad, onOpen }) {
       <p className="ad-copy">{creative.body || creative.title || 'No primary text available.'}</p>
       {creative.title && <h3>{creative.title}</h3>}
       <div className="platform-row">{(ad.publisher_platforms || []).map((p) => <span key={p}>{p.toLowerCase().includes('instagram') ? <Instagram size={13} /> : <Facebook size={13} />}{p.replace('_', ' ')}</span>)}</div>
-      <div className="card-footer"><span><CalendarDays size={14} /> {daysRunning(ad.start_date)} days</span><div className="score-pills">{ad.impressions_upper != null && <Pill tone="success">{ad.impressions_upper.toLocaleString()} imp.</Pill>}{ad.dropship_score != null && <Pill tone="accent">DS {ad.dropship_score}</Pill>}<Pill tone="accent">{ad.momentum_score != null ? `Momentum ${ad.momentum_score}` : `Score ${ad.evidence_score || scoreAd(ad)}`}</Pill></div></div>
+      <div className="card-footer"><span><CalendarDays size={14} /> {daysRunning(ad.start_date)} days</span><div className="score-pills">{(ad.variant_count || ad.collation_count) > 1 && <Pill tone="success">×{ad.variant_count || ad.collation_count} variants</Pill>}{ad.scale_score > 0 && <Pill tone="accent">Scale {ad.scale_score}</Pill>}{ad.impressions_upper != null && <Pill tone="success">{ad.impressions_upper.toLocaleString()} imp.</Pill>}{ad.dropship_score != null && <Pill tone="accent">DS {ad.dropship_score}</Pill>}<Pill tone="accent">{ad.momentum_score != null ? `Momentum ${ad.momentum_score}` : `Score ${ad.evidence_score || scoreAd(ad)}`}</Pill></div></div>
     </div>
   </article>;
 }
@@ -365,16 +370,64 @@ function DetailDrawer({ ad, loading, onClose, onCopy, copied }) {
       {loading && <div className="drawer-loading"><LoaderCircle className="spin" /> Loading full ad details…</div>}
       <div className="drawer-media">{video ? <video src={video} poster={image || undefined} controls playsInline /> : image ? <img src={image} alt="Ad creative" /> : <div className="media-placeholder"><Film size={32} />No media preview</div>}</div>
       <div className="drawer-body">
-        <div className="detail-metrics"><div><span>Evidence</span><strong>{ad.evidence_score || scoreAd(ad)}</strong></div><div><span>Running</span><strong>{daysRunning(ad.start_date)}d</strong></div><div><span>Started</span><strong>{formatDate(ad.start_date)}</strong></div></div>
+        <div className="detail-metrics"><div><span>Evidence</span><strong>{ad.evidence_score || scoreAd(ad)}</strong></div><div><span>Running</span><strong>{daysRunning(ad.start_date)}d</strong></div><div><span>Started</span><strong>{formatDate(ad.start_date)}</strong></div>{(ad.collation_count || ad.variant_count) > 1 && <div><span>Ads using this creative</span><strong>{ad.collation_count || ad.variant_count}</strong></div>}{ad.page_like_count != null && <div><span>Page likes</span><strong>{ad.page_like_count.toLocaleString()}</strong></div>}{ad.scale_score > 0 && <div><span>Scale score</span><strong>{ad.scale_score}</strong></div>}</div>
         <section><span className="section-label">Primary text</span><p className="full-copy">{creative.body || 'No primary text available.'}</p></section>
         {creative.title && <section><span className="section-label">Headline</span><h3>{creative.title}</h3></section>}
         <section><span className="section-label">Placement</span><div className="tag-list">{(ad.publisher_platforms || []).map((p) => <Pill key={p}>{p.replace('_', ' ')}</Pill>)}</div></section>
         {ad.matched_queries?.length > 0 && <section><span className="section-label">Matched searches</span><div className="tag-list">{ad.matched_queries.map((q) => <Pill key={q} tone="accent">{q}</Pill>)}</div></section>}
+        {ad.page_categories?.length > 0 && <section><span className="section-label">Advertiser category</span><div className="tag-list">{ad.page_categories.map((category) => <Pill key={category}>{category}</Pill>)}</div></section>}
+        {ad.creative?.link_url && <section><span className="section-label">Destination</span><a className="dest-link" href={ad.creative.link_url} target="_blank" rel="noreferrer">{ad.creative.link_url.replace(/^https?:\/\//, '').slice(0, 70)} <ArrowUpRight size={12} /></a></section>}
         {ad.dropship_signals?.length > 0 && <section><span className="section-label">Dropshipping discovery signals</span><div className="tag-list">{ad.dropship_signals.map((signal) => <Pill key={signal} tone="success">{signal}</Pill>)}</div><p className="signal-note">These are public direct-response/storefront signals, not proof that the merchant uses dropshipping fulfillment.</p></section>}
         <div className="drawer-actions"><button className="primary-button" onClick={onCopy}>{copied ? <Check size={17} /> : <Copy size={17} />}{copied ? 'Copied' : 'Copy Hunter brief'}</button><a className="secondary-button" href={`https://www.facebook.com/ads/library/?id=${ad.ad_archive_id}`} target="_blank" rel="noreferrer">Open in Meta <ArrowUpRight size={16} /></a></div>
       </div>
     </aside>
   </div>;
+}
+
+function Tracker({ onOpen }) {
+  const [view, setView] = useState('new');
+  const [data, setData] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { fetch('/api/registry/stats').then((r) => r.json()).then(setStats).catch(() => {}); }, []);
+  useEffect(() => {
+    const current = TRACKER_VIEWS.find((item) => item.id === view);
+    setLoading(true); setError('');
+    fetch(current.path).then(async (response) => {
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || 'Could not load the tracker');
+      setData({ kind: current.kind, payload });
+    }).catch((err) => setError(err.message)).finally(() => setLoading(false));
+  }, [view]);
+
+  return <section className="tracker">
+    <div className="tracker-head">
+      <div><h2>Ad tracker</h2><p>{stats ? `${stats.ads.toLocaleString()} distinct ads tracked across all scans · ${stats.new_7d.toLocaleString()} first seen this week · ${stats.new_24h.toLocaleString()} in the last 24h` : 'Everything every scan has ever collected, de-duplicated.'}</p></div>
+      <div className="view-toggle">{TRACKER_VIEWS.map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}>{item.label}</button>)}</div>
+    </div>
+    {error && <div className="error-banner"><Activity size={18} />{error}</div>}
+    {loading && <div className="drawer-loading"><LoaderCircle className="spin" /> Loading…</div>}
+    {!loading && data?.kind === 'ads' && (data.payload.ads.length
+      ? <section className="ad-grid">{data.payload.ads.map((ad) => <AdCard key={ad.ad_archive_id} ad={ad} onOpen={() => onOpen(ad)} />)}</section>
+      : <div className="empty-state"><Target size={36} /><h3>Nothing here yet</h3><p>Run a few scans — the tracker fills as ads are seen again over time.</p></div>)}
+    {!loading && data?.kind === 'advertisers' && <div className="tracker-table">
+      <div className="tracker-row tracker-row-head"><span>Advertiser</span><span>Ads</span><span>Active</span><span>Variants</span><span>Top scale</span><span>Since</span></div>
+      {data.payload.advertisers.map((row) => <div className="tracker-row" key={row.page_id}>
+        <span><strong>{row.page_name || row.page_id}</strong><small>{row.domains.slice(0, 2).join(' · ') || 'no storefront seen'}</small></span>
+        <span>{row.ads}</span><span>{row.active_ads}</span><span>{row.variants}</span><span>{row.top_scale}</span><span>{row.earliest_start || '—'}</span>
+      </div>)}
+    </div>}
+    {!loading && data?.kind === 'domains' && <div className="tracker-table">
+      <div className="tracker-row tracker-row-head"><span>Store</span><span>Ads</span><span>Active</span><span>Variants</span><span>Top scale</span><span>Advertisers</span></div>
+      {data.payload.domains.map((row) => <div className="tracker-row" key={row.domain}>
+        <span><strong>{row.domain}</strong><small>first launch {row.earliest_start || 'unknown'}</small></span>
+        <span>{row.ads}</span><span>{row.active_ads}</span><span>{row.variants}</span><span>{row.top_scale}</span><span>{row.pages}</span>
+      </div>)}
+    </div>}
+    <p className="impressions-note">Scale score = ads sharing the creative + how long it has run + live status + placements. It shows how hard an advertiser leans on a creative — not spend, sales or profit.</p>
+  </section>;
 }
 
 export default App;

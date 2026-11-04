@@ -1,5 +1,42 @@
 export const COUNTRY_OPTIONS = ['US', 'GB', 'CA', 'AU', 'DE', 'FR', 'ES', 'IT', 'NL', 'IL'];
 export const SCAN_WINDOWS = [3, 7, 14, 21, 30, 60, 90];
+export const SCAN_ORDERS = [
+  { value: 'impressions', label: 'Top by Meta impressions' },
+  { value: 'recent', label: 'Newest launches first' },
+];
+export const TRACKER_VIEWS = [
+  { id: 'new', label: 'New this week', path: '/api/registry/ads?sort=new&since_days=7&limit=60', kind: 'ads' },
+  { id: 'scaling', label: 'Scaling now', path: '/api/registry/ads?sort=scale&active=1&limit=60', kind: 'ads' },
+  { id: 'longest', label: 'Longest running', path: '/api/registry/ads?sort=longest&active=1&limit=60', kind: 'ads' },
+  { id: 'advertisers', label: 'Advertisers', path: '/api/registry/advertisers?sort=scale&limit=40', kind: 'advertisers' },
+  { id: 'stores', label: 'Stores', path: '/api/registry/domains?sort=scale&limit=40', kind: 'domains' },
+];
+
+// Quote-aware split on OR separators (| , newline) — mirrors the server so a phrase such as
+// "Buy 2, Get 1 Free" stays whole. Returns { text, exact }; exact = wrapped in double quotes.
+export function parseQueries(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const terms = []; const seen = new Set();
+  for (const input of values) {
+    const text = String(input || '');
+    let tokens = []; let current = ''; let inQuote = false;
+    for (const ch of text) {
+      if (ch === '"') inQuote = !inQuote;
+      if (!inQuote && (ch === ',' || ch === '|' || ch === '\n')) { tokens.push(current); current = ''; } else current += ch;
+    }
+    tokens.push(current);
+    if (inQuote) tokens = text.split(/[\n,|]+/);
+    for (const token of tokens) {
+      let clean = token.trim(); let exact = false;
+      while (clean.length >= 2 && ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'")))) {
+        if (clean.startsWith('"')) exact = true;
+        clean = clean.slice(1, -1).trim();
+      }
+      if (clean && !seen.has(clean)) { seen.add(clean); terms.push({ text: clean, exact }); }
+    }
+  }
+  return terms;
+}
 
 export function normalizeQueries(value) {
   const values = Array.isArray(value) ? value : [value];
@@ -24,6 +61,7 @@ export function buildSearchParams(filters) {
     end_date: filters.endDate,
     first: Math.max(1, Math.min(Number(filters.limit) || 10, 50)),
     sort: ['impressions', 'recent'].includes(filters.sort) ? filters.sort : '',
+    search_type: filters.searchType || '',
   };
   return new URLSearchParams(Object.entries(values).filter(([, value]) => value !== '' && value != null));
 }
