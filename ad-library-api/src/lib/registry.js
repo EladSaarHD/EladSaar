@@ -51,7 +51,7 @@ function recordSighting(scanId, ad, { domain = null, scale = { score: 0, variant
 const NON_STORE_DOMAINS = [
   'play.google.com', 'apps.apple.com', 'itunes.apple.com', 'apple.com', 'google.com', 'amazon.com', 'amazon.co.uk',
   'amazon.de', 'ebay.com', 'etsy.com', 'walmart.com', 'tiktok.com', 'youtube.com', 'youtu.be', 'wa.me',
-  'whatsapp.com', 'linktr.ee', 't.me', 'bit.ly', 'm.me', 'messenger.com', 'forms.gle',
+  'whatsapp.com', 'facebook.com', 'instagram.com', 'linktr.ee', 't.me', 'bit.ly', 'm.me', 'messenger.com', 'forms.gle',
 ];
 
 function clampLimit(value, fallback = 100) {
@@ -75,8 +75,9 @@ function buildFilters(options) {
   if (options.seedsOnly === '1' || options.seedsOnly === 1 || options.seedsOnly === true) clauses.push('r.seed_hit = 1');
   // stores_only: destination looks like a storefront (not an app store / marketplace / link hub).
   if (options.storesOnly === '1' || options.storesOnly === 1 || options.storesOnly === true) {
-    clauses.push(`r.domain IS NOT NULL AND r.domain NOT IN (${NON_STORE_DOMAINS.map(() => '?').join(',')})`);
-    args.push(...NON_STORE_DOMAINS);
+    // match the domain itself AND any subdomain (api.whatsapp.com, m.facebook.com, …)
+    clauses.push(`r.domain IS NOT NULL AND ${NON_STORE_DOMAINS.map(() => '(r.domain != ? AND r.domain NOT LIKE ?)').join(' AND ')}`);
+    for (const domain of NON_STORE_DOMAINS) args.push(domain, `%.${domain}`);
   }
   // launched_days: start_date within N days (an ad's own launch, not when we first saw it).
   if (options.launchedDays) {

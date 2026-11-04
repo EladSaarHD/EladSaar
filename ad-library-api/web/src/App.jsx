@@ -385,6 +385,18 @@ function DetailDrawer({ ad, loading, onClose, onCopy, copied }) {
 }
 
 function Tracker({ onOpen }) {
+  const [sweepNote, setSweepNote] = useState('');
+  async function sweep(row) {
+    setSweepNote(`Starting a sweep of ${row.page_name || row.page_id}…`);
+    try {
+      const response = await fetch(`/api/registry/advertisers/${encodeURIComponent(row.page_id)}/sweep`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAds: 500 }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || 'Could not start the sweep');
+      setSweepNote(`Sweep started for ${row.page_name || row.page_id}: collecting every active ad (scan ${data.id.slice(0, 8)}). Open Deep scan → recent work when it finishes.`);
+    } catch (err) { setSweepNote(err.message); }
+  }
   const [view, setView] = useState('new');
   const [data, setData] = useState(null);
   const [stats, setStats] = useState(null);
@@ -408,15 +420,16 @@ function Tracker({ onOpen }) {
       <div className="view-toggle">{TRACKER_VIEWS.map((item) => <button key={item.id} className={view === item.id ? 'active' : ''} onClick={() => setView(item.id)}>{item.label}</button>)}</div>
     </div>
     {error && <div className="error-banner"><Activity size={18} />{error}</div>}
+    {sweepNote && <div className="scan-summary"><Activity size={17} /><span>{sweepNote}</span></div>}
     {loading && <div className="drawer-loading"><LoaderCircle className="spin" /> Loading…</div>}
     {!loading && data?.kind === 'ads' && (data.payload.ads.length
       ? <section className="ad-grid">{data.payload.ads.map((ad) => <AdCard key={ad.ad_archive_id} ad={ad} onOpen={() => onOpen(ad)} />)}</section>
       : <div className="empty-state"><Target size={36} /><h3>Nothing here yet</h3><p>Run a few scans — the tracker fills as ads are seen again over time.</p></div>)}
     {!loading && data?.kind === 'advertisers' && <div className="tracker-table">
-      <div className="tracker-row tracker-row-head"><span>Advertiser</span><span>Ads</span><span>Active</span><span>Variants</span><span>Top scale</span><span>Since</span></div>
+      <div className="tracker-row tracker-row-head"><span>Advertiser</span><span>Ads</span><span>Active</span><span>Variants</span><span>Top scale</span><span>Since</span><span /></div>
       {data.payload.advertisers.map((row) => <div className="tracker-row" key={row.page_id}>
         <span><strong>{row.page_name || row.page_id}</strong><small>{row.domains.slice(0, 2).join(' · ') || 'no storefront seen'}</small></span>
-        <span>{row.ads}</span><span>{row.active_ads}</span><span>{row.variants}</span><span>{row.top_scale}</span><span>{row.earliest_start || '—'}</span>
+        <span>{row.ads}</span><span>{row.active_ads}</span><span>{row.variants}</span><span>{row.top_scale}</span><span>{row.earliest_start || '—'}</span><span><button className="sweep-button" onClick={() => sweep(row)}>Sweep</button></span>
       </div>)}
     </div>}
     {!loading && data?.kind === 'domains' && <div className="tracker-table">

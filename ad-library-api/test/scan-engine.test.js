@@ -288,6 +288,7 @@ test('registry separates ads found by the user\'s own terms from expansion-only 
   assert.ok(!seedOnly.includes('M1') && !seedOnly.includes('M2'), 'modifier-only hits are not seed hits');
   const stores = registry.listDomains({ storesOnly: '1', limit: 500 }).domains.map((d) => d.domain);
   assert.ok(!stores.includes('play.google.com'));
+  assert.ok(!stores.some((d) => /(^|\.)whatsapp\.com$/.test(d)), 'subdomains of non-store hosts are excluded too');
   assert.ok(registry.listDomains({ limit: 500 }).domains.some((d) => d.domain === 'play.google.com'));
   // backfilled rows have no scale in their old payload: the registry column wins
   const top = registry.listAds({ sort: 'scale', limit: 1 }).ads[0];
