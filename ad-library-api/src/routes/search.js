@@ -3,7 +3,7 @@
 const express = require('express');
 const config = require('../../config');
 const asyncHandler = require('../lib/asyncHandler');
-const { buildSearchVariables } = require('../lib/variables');
+const { applyExactPhrase, buildSearchVariables } = require('../lib/variables');
 const { runListQuery, isFresh } = require('../lib/listQuery');
 
 const router = express.Router();
@@ -12,7 +12,7 @@ const router = express.Router();
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const q = req.query;
+    const q = applyExactPhrase(req.query);
 
     // Only the fields that affect results go into the cache key / echo.
     const cacheParams = {

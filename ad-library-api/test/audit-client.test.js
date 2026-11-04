@@ -204,3 +204,15 @@ test('first-page POST fallback triggers only for HTML/network failures, never fo
   assert.strictEqual(client.shouldFallbackToPost(new Error('boom')), false);
 });
 
+
+test('pressure signals are recognised, coded rejections are not', () => {
+  const { UpstreamBlockedError } = require('../src/lib/errors');
+  assert.strictEqual(client.isPressureSignal(new UpstreamBlockedError('Upstream returned HTTP 429 (rate limited)')), true);
+  assert.strictEqual(client.isPressureSignal(new UpstreamBlockedError('Upstream returned an empty payload')), true);
+  assert.strictEqual(client.isPressureSignal(new UpstreamBlockedError('Initial search GET failed with HTTP 403')), true);
+  const coded = new UpstreamBlockedError('Upstream rejected the request (Meta error 1357054)');
+  coded.metaErrorCode = 1357054;
+  assert.strictEqual(client.isPressureSignal(coded), false);
+  assert.strictEqual(client.isPressureSignal(new Error('boom')), false);
+  assert.strictEqual(typeof client.getPacing().delay_ms, 'number');
+});

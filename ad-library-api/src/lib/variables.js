@@ -149,7 +149,18 @@ function buildDetailsVariables({ adArchiveId, pageId, country: c }) {
   };
 }
 
+// A single fully-quoted term ("foot drop brace") is an EXACT-phrase request, exactly as in scans. Without
+// this the quotes were sent as literal characters under unordered keyword matching (so "drop foot brace"
+// and "foot drop brace" returned the same pool). An explicit search_type from the caller always wins.
+function applyExactPhrase(params) {
+  const raw = typeof params.q === 'string' ? params.q.trim() : '';
+  const match = /^"([^"]+)"$/.exec(raw);
+  if (!match || params.search_type || params.page_id) return params;
+  return { ...params, q: match[1].trim(), search_type: 'keyword_exact_phrase' };
+}
+
 module.exports = {
+  applyExactPhrase,
   buildSearchVariables,
   buildPageVariables,
   buildDetailsVariables,

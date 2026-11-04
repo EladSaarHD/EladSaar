@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowUpRight, CalendarDays, Check, ChevronDown, ChevronRight, Copy, Facebook,
   Film, Filter, Image as ImageIcon, Instagram, Layers3, LoaderCircle, Menu,
@@ -39,6 +39,23 @@ function formatDate(value) {
 
 function Pill({ children, tone = 'neutral' }) {
   return <span className={`pill pill-${tone}`}>{children}</span>;
+}
+
+// Live pace + time-left for a running scan, from what the poller already receives. Needs a few seconds of
+// movement before it will guess, so it never shows a made-up ETA.
+export function ScanTiming({ job }) {
+  const start = useRef({ id: null, at: 0, ads: 0, progress: 0 });
+  if (start.current.id !== job.id) start.current = { id: job.id, at: Date.now(), ads: job.unique_ads, progress: job.progress };
+  if (job.status === 'queued') {
+    return <>{job.queue_position > 0 ? `${job.queue_position} scan${job.queue_position === 1 ? '' : 's'} ahead in the queue. ` : 'Starting… '}</>;
+  }
+  const seconds = (Date.now() - start.current.at) / 1000;
+  const gained = job.unique_ads - start.current.ads;
+  const progressGained = job.progress - start.current.progress;
+  if (seconds < 15 || gained < 5) return null;
+  const perMinute = Math.round((gained / seconds) * 60);
+  const minutesLeft = progressGained >= 2 ? Math.max(1, Math.round(((100 - job.progress) / progressGained) * seconds / 60)) : null;
+  return <>{perMinute.toLocaleString()} ads/min{minutesLeft ? ` · about ${minutesLeft} min left` : ''}. </>;
 }
 
 export function DiscardedCount({ count }) {
@@ -263,7 +280,7 @@ function App() {
             <button className="primary-button" disabled={loading || ['queued', 'running'].includes(scanJob?.status)}>{loading || ['queued', 'running'].includes(scanJob?.status) ? <LoaderCircle className="spin" size={18} /> : workspaceMode === 'search' ? <Search size={18} /> : <Layers3 size={18} />}<span>{loading ? 'Starting' : ['queued', 'running'].includes(scanJob?.status) ? 'Scan running' : workspaceMode === 'search' ? 'Search ads' : workspaceMode === 'dropshipping' ? 'Find stores' : 'Start scan'}</span></button>
           </div>
           {workspaceMode !== 'search' && <div className="scan-settings">
-            <div className="scan-presets"><span>Scan size</span><div><button type="button" className={Number(filters.targetAds) === 100 ? 'active' : ''} onClick={() => update('targetAds', 100)}>Fast <small>100</small></button><button type="button" className={Number(filters.targetAds) === 500 ? 'active' : ''} onClick={() => update('targetAds', 500)}>Standard <small>500</small></button><button type="button" className={Number(filters.targetAds) === 1000 ? 'active' : ''} onClick={() => update('targetAds', 1000)}>Deep <small>1,000</small></button></div></div>
+            <div className="scan-presets"><span>Scan size</span><div><button type="button" className={Number(filters.targetAds) === 100 ? 'active' : ''} onClick={() => update('targetAds', 100)}>Fast <small>100</small></button><button type="button" className={Number(filters.targetAds) === 500 ? 'active' : ''} onClick={() => update('targetAds', 500)}>Standard <small>500</small></button><button type="button" className={Number(filters.targetAds) === 1000 ? 'active' : ''} onClick={() => update('targetAds', 1000)}>Deep <small>1,000</small></button><button type="button" className={Number(filters.targetAds) === 5000 ? 'active' : ''} onClick={() => update('targetAds', 5000)}>Max <small>5,000</small></button></div></div>
             <label><span>Custom target</span><input type="number" min="30" max="10000" step="10" value={filters.targetAds} onChange={(e) => update('targetAds', e.target.value)} /></label>
             <div className="country-picker"><span>Countries</span><div className="country-chips">{COUNTRY_OPTIONS.map((country) => <button type="button" key={country} className={filters.scanCountries.includes(country) ? 'active' : ''} onClick={() => update('scanCountries', toggleCountry(filters.scanCountries, country))}>{country}</button>)}</div></div>
             <label><span>Launch window</span><select value={filters.lookbackDays} onChange={(e) => update('lookbackDays', e.target.value)}>{SCAN_WINDOWS.map((days) => <option key={days} value={days}>{days} days</option>)}</select></label>
@@ -283,9 +300,9 @@ function App() {
 
         {error && workspaceMode !== 'tracker' && <div className="error-banner"><Activity size={18} />{error}</div>}
         {workspaceMode !== 'tracker' && scanJob && ['queued', 'running'].includes(scanJob.status) && <section className="scan-progress">
-          <div className="scan-progress-head"><div><LoaderCircle className="spin" size={19} /><span><strong>Deep scan running</strong><small>{scanJob.unique_ads.toLocaleString()} unique ads collected{scanJob.discarded_ads > 0 && <> · <DiscardedCount count={scanJob.discarded_ads} /></>}</small></span></div><b>{scanJob.progress}%</b></div>
+          <div className="scan-progress-head"><div><LoaderCircle className="spin" size={19} /><span><strong>{scanJob.status === 'queued' ? 'Deep scan queued' : 'Deep scan running'}</strong><small>{scanJob.unique_ads.toLocaleString()} unique ads collected{scanJob.discarded_ads > 0 && <> · <DiscardedCount count={scanJob.discarded_ads} /></>}</small></span></div><b>{scanJob.progress}%</b></div>
           <div className="progress-track"><i style={{ width: `${scanJob.progress}%` }} /></div>
-          <p>Shard {scanJob.completed_shards} of {scanJob.total_shards} · Partial results appear below as they arrive and are stored locally.</p>
+          <p><ScanTiming job={scanJob} /> Shard {scanJob.completed_shards} of {scanJob.total_shards} · Partial results appear below as they arrive and are stored locally.</p>
         </section>}
         {workspaceMode !== 'tracker' && scanJob?.status === 'complete' && scanJob.error && <div className="scan-summary"><Activity size={17} /><span>{scanJob.error}</span></div>}
 

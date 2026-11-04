@@ -3,6 +3,7 @@
 const express = require('express');
 const pkg = require('../../package.json');
 const session = require('../lib/session');
+const { getPacing } = require('../lib/graphqlClient');
 const { cache } = require('../store');
 const asyncHandler = require('../lib/asyncHandler');
 const { checkCanary, lastCanary } = require('../lib/canary');
@@ -19,6 +20,7 @@ router.get('/', (req, res) => {
       ? { bootstrapped: true, age_seconds: Math.round((Date.now() - sess.fetchedAt) / 1000) }
       : { bootstrapped: false },
     cache: { rows: cache.count() },
+    pacing: getPacing(),
     // Last live check (first page + continuation). `null` until the first one has run.
     canary: lastCanary(),
     degraded: lastCanary() ? !lastCanary().ok : false,

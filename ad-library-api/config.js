@@ -45,6 +45,9 @@ const config = {
 
   cacheTtlSeconds: num(fileConfig.cacheTtlSeconds, env.CACHE_TTL_SECONDS, 3600),
   minRequestDelayMs: num(fileConfig.minRequestDelayMs, env.MIN_REQUEST_DELAY_MS, 2000),
+  // Adaptive pacing: starts at minRequestDelayMs, may creep down to fastestRequestDelayMs while requests stay
+  // clean, snaps back (and cools down) on any rate-limit signal. fastest == min means no speed-up.
+  fastestRequestDelayMs: num(fileConfig.fastestRequestDelayMs, env.FASTEST_REQUEST_DELAY_MS, 2000),
   maxRetries: num(fileConfig.maxRetries, env.MAX_RETRIES, 3),
   backoffBaseMs: num(fileConfig.backoffBaseMs, env.BACKOFF_BASE_MS, 5000),
   sessionTtlSeconds: num(fileConfig.sessionTtlSeconds, env.SESSION_TTL_SECONDS, 1800),

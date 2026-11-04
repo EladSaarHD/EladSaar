@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const config = require('../../config');
 const session = require('./session');
 const { httpFetch } = require('./http');
-const { RateLimiter } = require('./rateLimiter');
+const { AdaptiveRateLimiter } = require('./rateLimiter');
 const { TokenExpiredError, UpstreamBlockedError } = require('./errors');
 const {
   GRAPHQL_URL,
@@ -17,7 +17,7 @@ const {
   SORT_MODES,
 } = require('../constants');
 
-const limiter = new RateLimiter({ minDelayMs: config.minRequestDelayMs, concurrency: 1 });
+const limiter = new AdaptiveRateLimiter({ startMs: config.minRequestDelayMs, floorMs: config.fastestRequestDelayMs, concurrency: 1 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -418,10 +418,27 @@ async function requestSearchFirstPage(variables) {
   }
 }
 
-async function request({ kind, variables }) {
+// Signals that Meta is pushing back (as opposed to a deterministic, coded rejection of one cursor).
+function isPressureSignal(err) {
+  return err instanceof UpstreamBlockedError && !err.metaErrorCode
+    && /429|empty payload|Initial search GET failed|Could not extract initial search data|Network request to Facebook failed|HTTP 5\d\d/.test(err.message || '');
+}
+
+async function requestRaw({ kind, variables }) {
   if (kind === 'search' && !variables.cursor) return requestSearchFirstPage(variables);
   if (kind === 'details') return requestInitialDetails(variables);
   return requestWithRetries({ kind, variables });
+}
+
+async function request(args) {
+  try {
+    const data = await requestRaw(args);
+    limiter.reward();
+    return data;
+  } catch (err) {
+    if (isPressureSignal(err) && err.retryable !== 'backoff') limiter.penalize(err.message); // 'backoff' ones were counted in the retry loop
+    throw err;
+  }
 }
 
 async function requestWithRetries({ kind, variables }) {
@@ -440,6 +457,7 @@ async function requestWithRetries({ kind, variables }) {
         continue; // immediate retry with a fresh session
       }
 
+      if (err.retryable === 'backoff') limiter.penalize(err.message);
       if (err.retryable === 'backoff' && i < config.maxRetries) {
         const base = config.backoffBaseMs * 2 ** i;
         const jitter = Math.floor(base * 0.3 * pseudoRandom(i));
@@ -461,6 +479,8 @@ function pseudoRandom(i) {
 }
 
 module.exports = {
+  getPacing: () => limiter.stats(),
+  isPressureSignal,
   request,
   parseResponse,
   isStaleSession,

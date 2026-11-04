@@ -96,3 +96,16 @@ test('buildSearchVariables maps Ad Library impression and recent sort modes', ()
     direction: 'DESCENDING', mode: 'SORT_BY_RELEVANCY_MONTHLY_GROUPED',
   });
 });
+
+test('a fully quoted /api/search term becomes an exact-phrase search; unquoted or explicit types are untouched', () => {
+  const { applyExactPhrase, buildSearchVariables } = require('../src/lib/variables');
+  const exact = applyExactPhrase({ q: '"foot drop brace"', country: 'US' });
+  assert.strictEqual(exact.q, 'foot drop brace');
+  assert.strictEqual(buildSearchVariables(exact).searchType, 'keyword_exact_phrase');
+  assert.strictEqual(buildSearchVariables(exact).queryString, 'foot drop brace');
+  assert.deepStrictEqual(applyExactPhrase({ q: 'foot drop brace' }), { q: 'foot drop brace' });
+  assert.deepStrictEqual(applyExactPhrase({ q: '"a" "b"' }), { q: '"a" "b"' }, 'two quoted pieces are not one phrase');
+  assert.strictEqual(applyExactPhrase({ q: '"x y"', search_type: 'keyword_unordered' }).search_type, 'keyword_unordered');
+  assert.strictEqual(applyExactPhrase({ q: '"x y"', page_id: '123' }).q, '"x y"');
+});
+
