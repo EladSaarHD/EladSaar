@@ -242,7 +242,9 @@ async function collectShardPages({
   let uniqueAds = getUniqueCount();
   let exhausted = false;
   let pageError = null;
-  while (pages < maxPages && uniqueAds < targetAds) {
+  // `maxPages` may be a function of progress, so a budget can follow what the scan actually finds.
+  const pageLimit = () => (typeof maxPages === 'function' ? maxPages({ pages, uniqueAds }) : maxPages);
+  while (pages < pageLimit() && uniqueAds < targetAds) {
     let payload;
     try {
       payload = await fetchPage(params);
@@ -276,6 +278,20 @@ function pageBudget(remaining, { pageSize = 10, firstPageSize = 30, cap = 250 } 
   return Math.max(1, Math.min(cap, 1 + need + Math.ceil(need * 0.25) + 2));
 }
 
+// Budget that follows the scan's real yield. A windowed scan in impression order discards the ads that
+// launched before the window, so a fixed page budget sized for `remaining` ads stops far short of the target
+// (observed: ~25% kept for a broad term over 90 days). Once ~10 pages have been seen, scale the budget by
+// the observed kept-per-fetched ratio, bounded by `cap`. Early on the ratio is assumed to be 1.
+function createDensityBudget({ target, startUnique, cap, minSample = 100, minDensity = 0.04 }) {
+  return ({ pages, uniqueAds }) => {
+    const fetched = pages ? 30 + 10 * (pages - 1) : 0;
+    const kept = Math.max(0, uniqueAds - startUnique);
+    const density = fetched >= minSample ? Math.max(minDensity, Math.min(1, kept / fetched)) : 1;
+    const remaining = Math.max(0, target - uniqueAds);
+    return Math.min(cap, pages + Math.ceil(pageBudget(remaining, { cap }) / density));
+  };
+}
+
 // Launch-window early exit for `recent` (month-grouped, newest first) scans. Ads arrive
 // grouped by launch month, newest month first, so once whole pages sit entirely in months
 // before the window's first month no later page can hold an in-window ad. Requires
@@ -293,7 +309,7 @@ function createWindowEarlyStop({ windowStart, patience = 2 }) {
 }
 
 module.exports = {
-  buildQueryPlan, buildScanShards, collectShardPages, createWindowEarlyStop, expandQueries, extractStoreDomain,
+  buildQueryPlan, buildScanShards, collectShardPages, createDensityBudget, createWindowEarlyStop, expandQueries, extractStoreDomain,
   filterAdsToShardWindow, isWithinShardWindow, normalizeQueryTerms, normalizeScanWindow, pageBudget,
   parseQueryTerms, scoreDropshippingAd, scoreMomentum, scoreScale,
 };

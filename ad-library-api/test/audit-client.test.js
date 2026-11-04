@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const client = require('../src/lib/graphqlClient');
 const {
-  buildQueryPlan, buildScanShards, createWindowEarlyStop, expandQueries, normalizeQueryTerms, pageBudget,
+  buildQueryPlan, buildScanShards, createDensityBudget, createWindowEarlyStop, expandQueries, normalizeQueryTerms, pageBudget,
   parseQueryTerms, scoreScale,
 } = require('../src/lib/deepScan');
 const { normalizeAd } = require('../src/lib/normalize');
@@ -245,5 +245,33 @@ test('httpFetch enforces a hard timeout and reports it as a retryable network fa
     const res = await httpFetch(url, { timeoutMs: 400 });
     await assert.rejects(readText(res), (err) => err instanceof UpstreamBlockedError && err.retryable === 'backoff');
   } finally { server.closeAllConnections?.(); server.close(); }
+});
+
+test('density budget follows the real yield, is bounded by the cap, and is neutral before it has a sample', () => {
+  const budget = createDensityBudget({ target: 5000, startUnique: 0, cap: 1100 });
+  const early = budget({ pages: 3, uniqueAds: 40 });
+  assert.strictEqual(early, 3 + pageBudget(4960, { cap: 1100 }), 'no sample yet: assumes every ad is kept');
+  // 25% kept after 100 pages (1,020 fetched, 255 kept): needs ~4x the pages for what is left
+  const sparse = budget({ pages: 100, uniqueAds: 255 });
+  const dense = budget({ pages: 100, uniqueAds: 1000 });
+  assert.ok(sparse > dense, `sparse ${sparse} > dense ${dense}`);
+  assert.ok(sparse <= 1100 && dense <= 1100);
+  assert.strictEqual(budget({ pages: 1000, uniqueAds: 10 }), 1100, 'a near-empty yield is clamped by the cap, never unbounded');
+  // a fixed-size scan target of 1000 or less would not use this at all (see deepScanService)
+  const finished = budget({ pages: 600, uniqueAds: 5000 });
+  assert.ok(finished <= 600 + 1 + 3, 'nothing left to collect: no extra pages are budgeted');
+});
+
+test('collectShardPages accepts a budget function', async () => {
+  const { collectShardPages } = require('../src/lib/deepScan');
+  let unique = 0;
+  let fetched = 0;
+  const result = await collectShardPages({
+    initialParams: {}, targetAds: 1000,
+    maxPages: ({ pages }) => (pages < 7 ? 7 : pages), // grows no further than 7
+    fetchPage: async () => { fetched += 1; return { ads: [{ ad_archive_id: `a${fetched}` }], page_info: { has_next_page: true, end_cursor: `c${fetched}` } }; },
+    saveAds: (ads) => { unique += ads.length; }, getUniqueCount: () => unique,
+  });
+  assert.strictEqual(result.pages, 7);
 });
 

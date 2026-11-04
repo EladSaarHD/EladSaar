@@ -7,7 +7,7 @@ const { runListQuery } = require('./listQuery');
 const { CONTINUATION_PAGE_SIZE } = require('../constants');
 const {
   buildQueryPlan, buildScanShards, collectShardPages, createWindowEarlyStop, extractStoreDomain,
-  filterAdsToShardWindow, pageBudget, parseQueryTerms, normalizeScanWindow, scoreDropshippingAd,
+  createDensityBudget, filterAdsToShardWindow, pageBudget, parseQueryTerms, normalizeScanWindow, scoreDropshippingAd,
   scoreMomentum, scoreScale,
 } = require('./deepScan');
 const payloadStore = require('./payloadStore');
@@ -206,7 +206,10 @@ async function runScan(id, shards, config) {
           initialParams,
           targetAds: config.targetAds,
           // 1,100 pages ≈ 11,000 ads: enough for the largest allowed target (10,000) in one shard
-          maxPages: config.maxPagesPerShard || pageBudget(config.targetAds - countUnique(), { cap: 1100 }),
+          // Targets up to 1,000 keep the fixed budget (predictable daily runs); bigger ones follow the real yield.
+          maxPages: config.maxPagesPerShard || (config.targetAds > 1000
+            ? createDensityBudget({ target: config.targetAds, startUnique: countUnique(), cap: 1100 })
+            : pageBudget(config.targetAds - countUnique(), { cap: 1100 })),
           fetchPage,
           saveAds: (ads) => {
             const filtered = shard.pageId ? { ads, discarded: 0 } : filterAdsToShardWindow(ads, shard);
@@ -220,7 +223,8 @@ async function runScan(id, shards, config) {
             }
           },
           getUniqueCount: countUnique,
-          pause: () => sleep(config.pagePauseMs ?? 1000),
+          // The rate limiter already spaces requests; an extra fixed pause per page doubled the cycle time.
+          pause: () => sleep(config.pagePauseMs ?? 0),
           shouldStop: stopCheck,
         });
         if (result.pageError) continuationFailures += 1;
@@ -234,6 +238,9 @@ async function runScan(id, shards, config) {
       if (skipped) warnings.push(`${skipped} shard(s) skipped after bounded retries${lastError ? `: ${String(lastError.message || lastError).slice(0, 160)}` : ''}`);
       if (continuationFailures) warnings.push(`${continuationFailures} continuation cursor(s) failed mid-pagination; ads collected before the failure were preserved`);
       if (discarded) warnings.push(`Discarded ${discarded} out-of-window ad(s) with missing, invalid, or non-matching start_date`);
+      if (discarded > unique * 2 && config.sort !== 'recent' && !(config.pageIds || []).length) {
+        warnings.push(`${Math.round((discarded / (discarded + unique)) * 100)}% of the ads fetched launched before the ${config.lookbackDays}-day window; choose "Newest first" to reach in-window ads several times faster`);
+      }
       updateProgressStmt.run({ id, status: unique >= config.targetAds ? 'complete' : 'running', completed, discarded, error: warnings.join('. ') || null, now: Date.now() });
       if (unique >= config.targetAds) break;
       await sleep(config.requestPauseMs ?? 1000);
