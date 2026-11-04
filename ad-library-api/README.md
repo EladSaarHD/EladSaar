@@ -157,6 +157,24 @@ or store; ad copy is neutralised against spreadsheet-formula injection). The sca
 **Fail fast for interactive callers.** While Meta's cool-down is running, `/api/search` (UI search, Hunter's quick `search`) answers
 immediately with `429` + `Retry-After` and a plain message; only background scans wait the cool-down out.
 
+**Watchlists (scheduler).** `POST /api/watchlists` {name, queries, countries, lookbackDays, targetAds<=1000, everyMinutes>=30} makes
+AdSignal re-check terms on its own with *incremental, newest-first* scans (`GET/PATCH/DELETE /api/watchlists/:id`, `POST .../run`).
+One scan per minute-tick at most, and only when no other scan is queued or running, Meta is not limiting us (no cool-down and no
+2 h post-limit hold) and the hourly request budget is under 70% used. A rate-limit failure pushes that watchlist out 2 h. The
+Tracker tab has the same controls. `WATCH_SCHEDULER=0` disables it.
+
+**Alerts.** `GET /api/alerts?unacked=1`, `POST /api/alerts/ack {"ids":[...]|"all"}`. Raised once per episode: Meta rate-limited us (and
+the first success afterwards), the live check broke (and recovered), a scheduled scan failed. Hunter's watchdog (every 6 h) delivers
+them to the owner and acknowledges them; set `ALERT_WEBHOOK_URL` for instant delivery. The Tracker shows "Data as of ..." from
+`GET /api/health` -> `data`, so stale data is never presented as live.
+
+**Contract tests on real Meta responses.** `POST /api/admin/capture-fixtures` (2 requests through the normal limiter; refuses while a
+rate-limit hold is active) saves sanitised real responses to `test/fixtures/live-YYYYMMDD/`; `test/live-fixtures.test.js` then parses
+them with the real parsers, so a Meta format change fails a test instead of silently emptying scans. Skipped until the first capture.
+
+**One gate to Meta.** Run nothing that talks to Meta outside this service (no ad-hoc scripts, ramps or probes): everything shares one
+pace limiter and one hourly budget (`MAX_REQUESTS_PER_HOUR`, 300).
+
 **Storage.** Each distinct ad is stored once, compressed, in `ad_payloads`; scan rows are small. See
 `scripts/migrate-payloads.js` (one-time migration of old databases) and `docs/audit-2026-11-04.md`.
 
