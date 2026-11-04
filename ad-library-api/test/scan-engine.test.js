@@ -510,6 +510,34 @@ test('createScan: incremental forces newest-first and is part of the request ide
   for (let i = 0; i < 100 && ['queued', 'running'].includes(service.getJob(b.id).status); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
 });
 
+
+test('CSV export: headers, values, quoting, and spreadsheet-formula injection are all handled', async () => {
+  const { toCsv, cell, AD_COLUMNS, STORE_COLUMNS } = require('../src/lib/csv');
+  assert.strictEqual(cell('plain'), 'plain');
+  assert.strictEqual(cell('a,b'), '"a,b"');
+  assert.strictEqual(cell('say "hi"'), '"say ""hi"""');
+  assert.strictEqual(cell('=HYPERLINK("http://evil")'), '"\'=HYPERLINK(""http://evil"")"', 'formula prefixes are neutralised');
+  assert.strictEqual(cell('+1 now'), "'+1 now");
+  assert.strictEqual(cell('-5'), '-5', 'plain negative numbers are left alone');
+  assert.strictEqual(cell(['a', 'b']), 'a; b');
+  assert.strictEqual(cell(null), '');
+  script = () => ({ ads: [makeAd('CSV-1', { creative: { link_url: 'https://csv.example/products/x', body: '=SUM(1,2) great, "quoted" offer' } }), makeAd('CSV-2')], page_info: { has_next_page: false, end_cursor: null }, count: 2 });
+  const config = { targetAds: 30, queries: ['csv term'], lookbackDays: 90, activeStatus: 'active', sort: 'impressions', ...FAST };
+  const shard = { ...SHARD, query: 'csv term' };
+  const id = newJob(config, [shard]);
+  await service.runScan(id, [shard], config);
+  const ads = service.listAds(id, { limit: 100000, maxLimit: 100000 }).ads;
+  const csv = toCsv(AD_COLUMNS, ads);
+  assert.ok(csv.startsWith('\ufeffAd ID,Ad Library URL,Advertiser'), 'BOM + header');
+  const lines = csv.trim().split('\r\n');
+  assert.strictEqual(lines.length, 3, 'header + 2 ads');
+  assert.ok(csv.includes('https://www.facebook.com/ads/library/?id=CSV-1'));
+  assert.ok(csv.includes("'=SUM(1,2) great"), 'ad copy cannot run as a formula');
+  const storesCsv = toCsv(STORE_COLUMNS, service.listStores(id, { limit: 100000, maxLimit: 100000 }).stores);
+  assert.ok(storesCsv.split('\r\n')[0].startsWith('\ufeffStore,Advertiser pages,Ads'));
+  assert.ok(storesCsv.includes('csv.example'));
+});
+
 test.after(() => {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });

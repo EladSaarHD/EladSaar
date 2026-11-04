@@ -404,7 +404,7 @@ function seedSet(id) {
 }
 
 function listAds(id, options = {}) {
-  const limit = Math.max(1, Math.min(Number(options.limit) || 100, 500));
+  const limit = Math.max(1, Math.min(Number(options.limit) || 100, options.maxLimit || 500));
   const offset = Math.max(0, Number(options.offset) || 0);
   const { seeds, sort: scanSort } = seedSet(id);
   // `impressions`: for scans collected in Meta's impression order the stored rank IS the
@@ -479,7 +479,7 @@ function listStores(id, options = {}) {
     matched_queries: [...store.matched_queries], countries: [...store.countries] }));
   values.sort(sorters[options.sort] || sorters.dropship);
   const offset = Math.max(0, Number(options.offset) || 0);
-  const limit = Math.max(1, Math.min(Number(options.limit) || 100, 500));
+  const limit = Math.max(1, Math.min(Number(options.limit) || 100, options.maxLimit || 500));
   return { total: values.length, offset, limit, stores: values.slice(offset, offset + limit) };
 }
 
